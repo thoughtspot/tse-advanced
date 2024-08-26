@@ -1,15 +1,325 @@
+// istanbul ignore next
+const isObject = (obj) => {
+    if (typeof obj === "object" && obj !== null) {
+        if (typeof Object.getPrototypeOf === "function") {
+            const prototype = Object.getPrototypeOf(obj);
+            return prototype === Object.prototype || prototype === null;
+        }
+        return Object.prototype.toString.call(obj) === "[object Object]";
+    }
+    return false;
+};
+const merge = (...objects) => objects.reduce((result, current) => {
+    if (Array.isArray(current)) {
+        throw new TypeError("Arguments provided to ts-deepmerge must be objects, not arrays.");
+    }
+    Object.keys(current).forEach((key) => {
+        if (["__proto__", "constructor", "prototype"].includes(key)) {
+            return;
+        }
+        if (Array.isArray(result[key]) && Array.isArray(current[key])) {
+            result[key] = merge.options.mergeArrays
+                ? Array.from(new Set(result[key].concat(current[key])))
+                : current[key];
+        }
+        else if (isObject(result[key]) && isObject(current[key])) {
+            result[key] = merge(result[key], current[key]);
+        }
+        else {
+            result[key] = current[key];
+        }
+    });
+    return result;
+}, {});
+const defaultOptions = {
+    mergeArrays: true,
+};
+merge.options = defaultOptions;
+merge.withOptions = (options, ...objects) => {
+    merge.options = Object.assign({ mergeArrays: true }, options);
+    const result = merge(...objects);
+    merge.options = defaultOptions;
+    return result;
+};
+
+/**
+ * Copyright (c) 2023
+ *
+ * Common utility functions for ThoughtSpot Visual Embed SDK
+ * @summary Utils
+ * @author Ayon Ghosh <ayon.ghosh@thoughtspot.com>
+ */
+/**
+ * Construct a runtime filters query string from the given filters.
+ * Refer to the following docs for more details on runtime filter syntax:
+ * https://cloud-docs.thoughtspot.com/admin/ts-cloud/apply-runtime-filter.html
+ * https://cloud-docs.thoughtspot.com/admin/ts-cloud/runtime-filter-operators.html
+ * @param runtimeFilters
+ */
+const getFilterQuery = (runtimeFilters) => {
+    if (runtimeFilters && runtimeFilters.length) {
+        const filters = runtimeFilters.map((filter, valueIndex) => {
+            const index = valueIndex + 1;
+            const filterExpr = [];
+            filterExpr.push(`col${index}=${encodeURIComponent(filter.columnName)}`);
+            filterExpr.push(`op${index}=${filter.operator}`);
+            filterExpr.push(filter.values.map((value) => {
+                const encodedValue = typeof value === 'bigint' ? value.toString() : value;
+                return `val${index}=${encodeURIComponent(String(encodedValue))}`;
+            }).join('&'));
+            return filterExpr.join('&');
+        });
+        return `${filters.join('&')}`;
+    }
+    return null;
+};
+/**
+ * Construct a runtime parameter override query string from the given option.
+ * @param runtimeParameters
+ */
+const getRuntimeParameters = (runtimeParameters) => {
+    if (runtimeParameters && runtimeParameters.length) {
+        const params = runtimeParameters.map((param, valueIndex) => {
+            const index = valueIndex + 1;
+            const filterExpr = [];
+            filterExpr.push(`param${index}=${encodeURIComponent(param.name)}`);
+            filterExpr.push(`paramVal${index}=${encodeURIComponent(param.value)}`);
+            return filterExpr.join('&');
+        });
+        return `${params.join('&')}`;
+    }
+    return null;
+};
+/**
+ * Convert a value to a string representation to be sent as a query
+ * parameter to the ThoughtSpot app.
+ * @param value Any parameter value
+ */
+const serializeParam = (value) => {
+    // do not serialize primitive types
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return value;
+    }
+    return JSON.stringify(value);
+};
+/**
+ * Convert a value to a string:
+ * in case of an array, we convert it to CSV.
+ * in case of any other type, we directly return the value.
+ * @param value
+ */
+const paramToString = (value) => (Array.isArray(value) ? value.join(',') : value);
+/**
+ * Return a query param string composed from the given params object
+ * @param queryParams
+ * @param shouldSerializeParamValues
+ */
+const getQueryParamString = (queryParams, shouldSerializeParamValues = false) => {
+    const qp = [];
+    const params = Object.keys(queryParams);
+    params.forEach((key) => {
+        const val = queryParams[key];
+        if (val !== undefined) {
+            const serializedValue = shouldSerializeParamValues
+                ? serializeParam(val)
+                : paramToString(val);
+            qp.push(`${key}=${serializedValue}`);
+        }
+    });
+    if (qp.length) {
+        return qp.join('&');
+    }
+    return null;
+};
+/**
+ * Get a string representation of a dimension value in CSS
+ * If numeric, it is considered in pixels.
+ * @param value
+ */
+const getCssDimension = (value) => {
+    if (typeof value === 'number') {
+        return `${value}px`;
+    }
+    return value;
+};
+/**
+ * Append a string to a URL's hash fragment
+ * @param url A URL
+ * @param stringToAppend The string to append to the URL hash
+ */
+const appendToUrlHash = (url, stringToAppend) => {
+    let outputUrl = url;
+    const encStringToAppend = encodeURIComponent(stringToAppend);
+    if (url.indexOf('#') >= 0) {
+        outputUrl = `${outputUrl}${encStringToAppend}`;
+    }
+    else {
+        outputUrl = `${outputUrl}#${encStringToAppend}`;
+    }
+    return outputUrl;
+};
+/**
+ *
+ * @param url
+ * @param stringToAppend
+ * @param path
+ */
+function getRedirectUrl(url, stringToAppend, path = '') {
+    const targetUrl = path ? new URL(path, window.location.origin).href : url;
+    return appendToUrlHash(targetUrl, stringToAppend);
+}
+const getEncodedQueryParamsString = (queryString) => {
+    if (!queryString) {
+        return queryString;
+    }
+    return btoa(queryString).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+const getOffsetTop = (element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.top + window.scrollY;
+};
+const embedEventStatus = {
+    START: 'start',
+    END: 'end',
+};
+const setAttributes = (element, attributes) => {
+    Object.keys(attributes).forEach((key) => {
+        element.setAttribute(key, attributes[key].toString());
+    });
+};
+const isCloudRelease = (version) => version.endsWith('.cl');
+/* For Search Embed: ReleaseVersionInBeta */
+const checkReleaseVersionInBeta = (releaseVersion, suppressBetaWarning) => {
+    if (releaseVersion !== '' && !isCloudRelease(releaseVersion)) {
+        const splittedReleaseVersion = releaseVersion.split('.');
+        const majorVersion = Number(splittedReleaseVersion[0]);
+        const isBetaVersion = majorVersion < 8;
+        return !suppressBetaWarning && isBetaVersion;
+    }
+    return false;
+};
+const getCustomisations = (embedConfig, viewConfig) => {
+    var _a, _b, _c, _d;
+    const customCssUrlFromEmbedConfig = embedConfig.customCssUrl;
+    const customizationsFromViewConfig = viewConfig.customizations;
+    const customizationsFromEmbedConfig = embedConfig.customizations
+        || embedConfig.customisations;
+    const customizations = {
+        style: {
+            ...customizationsFromEmbedConfig === null || customizationsFromEmbedConfig === void 0 ? void 0 : customizationsFromEmbedConfig.style,
+            ...customizationsFromViewConfig === null || customizationsFromViewConfig === void 0 ? void 0 : customizationsFromViewConfig.style,
+            customCSS: {
+                ...(_a = customizationsFromEmbedConfig === null || customizationsFromEmbedConfig === void 0 ? void 0 : customizationsFromEmbedConfig.style) === null || _a === void 0 ? void 0 : _a.customCSS,
+                ...(_b = customizationsFromViewConfig === null || customizationsFromViewConfig === void 0 ? void 0 : customizationsFromViewConfig.style) === null || _b === void 0 ? void 0 : _b.customCSS,
+            },
+            customCSSUrl: ((_c = customizationsFromViewConfig === null || customizationsFromViewConfig === void 0 ? void 0 : customizationsFromViewConfig.style) === null || _c === void 0 ? void 0 : _c.customCSSUrl)
+                || ((_d = customizationsFromEmbedConfig === null || customizationsFromEmbedConfig === void 0 ? void 0 : customizationsFromEmbedConfig.style) === null || _d === void 0 ? void 0 : _d.customCSSUrl)
+                || customCssUrlFromEmbedConfig,
+        },
+        content: {
+            ...customizationsFromEmbedConfig === null || customizationsFromEmbedConfig === void 0 ? void 0 : customizationsFromEmbedConfig.content,
+            ...customizationsFromViewConfig === null || customizationsFromViewConfig === void 0 ? void 0 : customizationsFromViewConfig.content,
+        },
+    };
+    return customizations;
+};
+const getRuntimeFilters = (runtimefilters) => getFilterQuery(runtimefilters || []);
+/**
+ * Gets a reference to the DOM node given
+ * a selector.
+ * @param domSelector
+ */
+function getDOMNode(domSelector) {
+    return typeof domSelector === 'string' ? document.querySelector(domSelector) : domSelector;
+}
+const deepMerge = (target, source) => merge(target, source);
+const getOperationNameFromQuery = (query) => {
+    const regex = /(?:query|mutation)\s+(\w+)/;
+    const matches = query.match(regex);
+    return matches === null || matches === void 0 ? void 0 : matches[1];
+};
+/**
+ *
+ * @param obj
+ */
+function removeTypename(obj) {
+    if (!obj || typeof obj !== 'object')
+        return obj;
+    // eslint-disable-next-line no-restricted-syntax
+    for (const key in obj) {
+        if (key === '__typename') {
+            delete obj[key];
+        }
+        else if (typeof obj[key] === 'object') {
+            removeTypename(obj[key]);
+        }
+    }
+    return obj;
+}
+/**
+ * Sets the specified style properties on an HTML element.
+ * @param {HTMLElement} element - The HTML element to which the styles should be applied.
+ * @param {Partial<CSSStyleDeclaration>} styleProperties - An object containing style
+ * property names and their values.
+ * @example
+ * // Apply styles to an element
+ * const element = document.getElementById('myElement');
+ * const styles = {
+ *   backgroundColor: 'red',
+ *   fontSize: '16px',
+ * };
+ * setStyleProperties(element, styles);
+ */
+const setStyleProperties = (element, styleProperties) => {
+    if (!(element === null || element === void 0 ? void 0 : element.style))
+        return;
+    Object.keys(styleProperties).forEach((styleProperty) => {
+        element.style[styleProperty] = styleProperties[styleProperty].toString();
+    });
+};
+/**
+ * Removes specified style properties from an HTML element.
+ * @param {HTMLElement} element - The HTML element from which the styles should be removed.
+ * @param {string[]} styleProperties - An array of style property names to be removed.
+ * @example
+ * // Remove styles from an element
+ * const element = document.getElementById('myElement');
+ * element.style.backgroundColor = 'red';
+ * const propertiesToRemove = ['backgroundColor'];
+ * removeStyleProperties(element, propertiesToRemove);
+ */
+const removeStyleProperties = (element, styleProperties) => {
+    if (!(element === null || element === void 0 ? void 0 : element.style))
+        return;
+    styleProperties.forEach((styleProperty) => {
+        element.style.removeProperty(styleProperty);
+    });
+};
+const isUndefined = (value) => value === undefined;
+// Return if the value is a string, double or boolean.
+const getTypeFromValue = (value) => {
+    if (typeof value === 'string') {
+        return ['char', 'string'];
+    }
+    if (typeof value === 'number') {
+        return ['double', 'double'];
+    }
+    if (typeof value === 'boolean') {
+        return ['boolean', 'boolean'];
+    }
+    return ['', ''];
+};
+
 /**
  * Copyright (c) 2023
  *
  * TypeScript type definitions for ThoughtSpot Visual Embed SDK
- *
  * @summary Type definitions for Embed SDK
  * @author Ayon Ghosh <ayon.ghosh@thoughtspot.com>
  */
 /**
  * The authentication mechanism for allowing access to the
  * the embedded app
- *
  * @group Authentication / Init
  */
 // eslint-disable-next-line no-shadow
@@ -18,7 +328,6 @@ var AuthType;
     /**
      * No authentication on the SDK. Passthrough to the embedded App. Alias for
      * `Passthrough`.
-     *
      * @example
      * ```js
      * init({
@@ -36,7 +345,6 @@ var AuthType;
      * To use this:
      * Your SAML or OpenID provider must allow iframe redirects.
      * For example, if you are using Okta as IdP, you can enable iframe embedding.
-     *
      * @example
      * ```js
      * init({
@@ -49,14 +357,12 @@ var AuthType;
     AuthType["EmbeddedSSO"] = "EmbeddedSSO";
     /**
      * SSO using SAML
-     *
      * @deprecated Use {@link SAMLRedirect} instead
      * @hidden
      */
     AuthType["SSO"] = "SSO_SAML";
     /**
      * SSO using SAML
-     *
      * @deprecated Use {@link SAMLRedirect} instead
      * @hidden
      */
@@ -68,7 +374,6 @@ var AuthType;
      *
      * This redirects the host application to the SAML IdP. The host application
      * will be redirected back to the ThoughtSpot app after authentication.
-     *
      * @example
      * ```js
      * init({
@@ -109,7 +414,6 @@ var AuthType;
     AuthType["SAMLRedirect"] = "SSO_SAML";
     /**
      * SSO using OIDC
-     *
      * @hidden
      * @deprecated Use {@link OIDCRedirect} instead
      */
@@ -122,7 +426,6 @@ var AuthType;
     AuthType["OIDCRedirect"] = "SSO_OIDC";
     /**
      * Trusted authentication server
-     *
      * @hidden
      * @deprecated Use {@link TrustedAuth} instead
      */
@@ -131,7 +434,6 @@ var AuthType;
      * Trusted authentication server. Use your own authentication server
      * which returns a bearer token, generated using the `secret_key` obtained
      * from ThoughtSpot.
-     *
      * @example
      * ```js
      * init({
@@ -143,7 +445,6 @@ var AuthType;
      *      .then((data) => data.token);
      *  }
      * });
-     * });
      * ```
      */
     AuthType["TrustedAuthToken"] = "AuthServer";
@@ -153,7 +454,6 @@ var AuthType;
      * obtained from ThoughtSpot. This uses a cookieless authentication
      * approach, recommended to bypass the third-party cookie-blocking restriction
      * implemented by some browsers.
-     *
      * @example
      * ```js
      * init({
@@ -210,6 +510,10 @@ var HomeLeftNavItem;
      * @version SDK: 1.28.0| ThoughtSpot: 9.12.5.cl
      */
     HomeLeftNavItem["SpotIQAnalysis"] = "spotiq-analysis";
+    /**
+     * @version SDK: 1.34.0| ThoughtSpot: 10.3.0.cl
+     */
+    HomeLeftNavItem["LiveboardSchedules"] = "liveboard-schedules";
 })(HomeLeftNavItem || (HomeLeftNavItem = {}));
 /**
  * A map of the supported runtime filter operations
@@ -273,13 +577,16 @@ var RuntimeFilterOp;
      * Is included in this list of values
      */
     RuntimeFilterOp["IN"] = "IN";
+    /**
+     * Is not included in this list of values
+     */
+    RuntimeFilterOp["NOT_IN"] = "NOT_IN";
 })(RuntimeFilterOp || (RuntimeFilterOp = {}));
 /**
  * Home page module that can be hidden.
  * **Note**: This option does not apply to the classic homepage.
  * To access the updated modular homepage, set
  * `modularHomeExperience` to `true` (available as Early Access feature in 9.12.5.cl).
- *
  * @version SDK: 1.28.0 | Thoughtspot: 9.12.5.cl
  */
 // eslint-disable-next-line no-shadow
@@ -315,7 +622,6 @@ var HomepageModule;
  *
  * To add an event listener use the corresponding
  * {@link LiveboardEmbed.on} or {@link AppEmbed.on} or {@link SearchEmbed.on} method.
- *
  *  @example
  * ```js
  * import { EmbedEvent } from '@thoughtspot/visual-embed-sdk';
@@ -335,7 +641,6 @@ var EmbedEvent;
 (function (EmbedEvent) {
     /**
      * Rendering has initialized.
-     *
      * @example
      *```js
      * liveboardEmbed.on(EmbedEvent.Init, showLoader)
@@ -349,7 +654,7 @@ var EmbedEvent;
     EmbedEvent["Init"] = "init";
     /**
      * Authentication has either succeeded or failed.
-     *
+     * @version SDK: 1.1.0 | ThoughtSpot: ts7.may.cl, 8.4.1.sw
      * @example
      *```js
      * appEmbed.on(EmbedEvent.AuthInit, payload => {
@@ -361,8 +666,8 @@ var EmbedEvent;
     EmbedEvent["AuthInit"] = "authInit";
     /**
      * The embed object container has loaded.
-     *
      * @returns timestamp - The timestamp when the event was generated.
+     * @version SDK: 1.1.0 | ThoughtSpot: ts7.may.cl, 8.4.1.sw
      * @example
      *```js
      * liveboardEmbed.on(EmbedEvent.Load, hideLoader)
@@ -375,8 +680,8 @@ var EmbedEvent;
     EmbedEvent["Load"] = "load";
     /**
      * Data pertaining to answer or Liveboard is received
-     *
      * @return data - The answer or Liveboard data
+     * @version SDK: 1.1.0 | ThoughtSpot: ts7.may.cl, 8.4.1.sw
      * @example
      *```js
      * liveboardEmbed.on(EmbedEvent.Data, payload => {
@@ -387,14 +692,8 @@ var EmbedEvent;
      */
     EmbedEvent["Data"] = "data";
     /**
-     * Search/Answer/Liveboard filters have been applied/updated by the user.
-     *
-     * @hidden
-     */
-    EmbedEvent["FiltersChanged"] = "filtersChanged";
-    /**
      * Search query has been updated by the user.
-     *
+     * @version SDK: 1.4.0 | ThoughtSpot: ts7.sep.cl, 8.4.1.sw
      * @example
      *```js
      * searchEmbed.on(EmbedEvent.QueryChanged, payload => console.log('data', payload))
@@ -403,13 +702,13 @@ var EmbedEvent;
     EmbedEvent["QueryChanged"] = "queryChanged";
     /**
      * A drill-down operation has been performed.
-     *
+     * @version SDK: 1.1.0 | ThoughtSpot: ts7.may.cl, 8.4.1.sw
      * @returns additionalFilters - Any additional filters applied
      * @returns drillDownColumns - The columns on which drill down was performed
      * @returns nonFilteredColumns - The columns that were not filtered
      * @example
      *```js
-     * searchEmbed.trigger(EmbedEvent.DrillDown, {
+     * searchEmbed.on(EmbedEvent.DrillDown, {
      *    points: {
      *        clickedPoint,
      *        selectedPoints: selectedPoint
@@ -440,8 +739,8 @@ var EmbedEvent;
     EmbedEvent["Drilldown"] = "drillDown";
     /**
      * One or more data sources have been selected.
-     *
      * @returns dataSourceIds - the list of data sources
+     * @version SDK: 1.1.0 | ThoughtSpot: ts7.may.cl, 8.4.1.sw
      * @example
      * ```js
      * searchEmbed.on(EmbedEvent.DataSourceSelected, payload => {
@@ -452,7 +751,6 @@ var EmbedEvent;
     EmbedEvent["DataSourceSelected"] = "dataSourceSelected";
     /**
      * One or more data columns have been selected.
-     *
      * @returns columnIds - the list of columns
      * @version SDK: 1.10.0 | ThoughtSpot: 8.2.0.cl, 8.4.1.sw
      * @example
@@ -465,10 +763,10 @@ var EmbedEvent;
     EmbedEvent["AddRemoveColumns"] = "addRemoveColumns";
     /**
      * A custom action has been triggered.
-     *
      * @returns actionId - ID of the custom action
      * @returns payload {@link CustomActionPayload} - Response payload with the
      * Answer or Liveboard data
+     * @version SDK: 1.1.0 | ThoughtSpot: ts7.may.cl, 8.4.1.sw
      * @example
      * ```js
      * appEmbed.on(EmbedEvent.customAction, payload => {
@@ -482,7 +780,6 @@ var EmbedEvent;
     EmbedEvent["CustomAction"] = "customAction";
     /**
      * Listen to double click actions on a visualization.
-     *
      * @return ContextMenuInputPoints - Data point that is double-clicked
      * @version SDK: 1.5.0 | ThoughtSpot: ts7.oct.cl, 7.2.1
      * @example
@@ -495,7 +792,6 @@ var EmbedEvent;
     EmbedEvent["VizPointDoubleClick"] = "vizPointDoubleClick";
     /**
      * Listen to clicks on a visualization in a Liveboard or Search result.
-     *
      * @return viz, clickedPoint - metadata about the point that is clicked
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @important
@@ -516,22 +812,16 @@ var EmbedEvent;
     /**
      * An error has occurred. This event is fired for the following error types:
      *
-     *  API - API call failure error.
+     * `API` - API call failure error.
+     * `FULLSCREEN` - Error when presenting a Liveboard or visualization in full screen
+     * mode. `SINGLE_VALUE_FILTER` - Error due to multiple values in the single value
+     * filter. `NON_EXIST_FILTER` - Error due to a non-existent filter.
+     * `INVALID_DATE_VALUE` - Invalid date value error.
+     * `INVALID_OPERATOR` - Use of invalid operator during filter application.
      *
-     *  FULLSCREEN - Error when presenting a Liveboard or visualization in full screen
-     *  mode.
-     *
-     *  SINGLE_VALUE_FILTER - Error due to multiple values in the single value filter.
-     *
-     *  NON_EXIST_FILTER - Error due to a non-existent filter.
-     *
-     *  INVALID_DATE_VALUE - Invalid date value error.
-     *
-     *  INVALID_OPERATOR - Use of invalid operator during filter application.
-     *
-     *  For more information, see [Developer Documentation](https://developers.thoughtspot.com/docs/events-app-integration#errorType)
-     *
+     * For more information, see https://developers.thoughtspot.com/docs/events-app-integration#errorType
      * @returns error - An error object or message
+     * @version SDK: 1.1.0 | ThoughtSpot: ts7.may.cl, 8.4.1.sw
      * @example
      * ```js
      * // API error
@@ -555,8 +845,8 @@ var EmbedEvent;
     EmbedEvent["Error"] = "Error";
     /**
      * The embedded object has sent an alert.
-     *
      * @returns alert - An alert object
+     * @version SDK: 1.1.0 | ThoughtSpot: ts7.may.cl, 8.4.1.sw
      * @example
      * ```js
      * searchEmbed.on(EmbedEvent.Alert)
@@ -565,7 +855,7 @@ var EmbedEvent;
     EmbedEvent["Alert"] = "alert";
     /**
      * The ThoughtSpot auth session has expired.
-     *
+     * @version SDK: 1.4.0 | ThoughtSpot: ts7.sep.cl, 8.4.1.sw
      * @example
      *```js
      * appEmbed.on(EmbedEvent.AuthExpire, showAuthExpired)
@@ -578,26 +868,22 @@ var EmbedEvent;
     EmbedEvent["AuthExpire"] = "ThoughtspotAuthExpired";
     /**
      * ThoughtSpot failed to validate the auth session.
-     *
      * @hidden
      */
     EmbedEvent["AuthFailure"] = "ThoughtspotAuthFailure";
     /**
      * ThoughtSpot failed to validate the auth session.
-     *
      * @hidden
      */
     EmbedEvent["AuthLogout"] = "ThoughtspotAuthLogout";
     /**
      * The height of the embedded Liveboard or visualization has been computed.
-     *
      * @returns data - The height of the embedded Liveboard or visualization
      * @hidden
      */
     EmbedEvent["EmbedHeight"] = "EMBED_HEIGHT";
     /**
      * The center of visible iframe viewport is calculated.
-     *
      * @returns data - The center of the visible Iframe viewport.
      * @hidden
      */
@@ -605,7 +891,6 @@ var EmbedEvent;
     /**
      * Emitted when the **Get Data** action is initiated.
      * Applicable to `SearchBarEmbed` only.
-     *
      * @version SDK: 1.19.0 | ThoughtSpot: 9.0.0.cl, 9.0.1.sw
      * @example
      *```js
@@ -618,7 +903,7 @@ var EmbedEvent;
     EmbedEvent["GetDataClick"] = "getDataClick";
     /**
      * Detects the route change.
-     *
+     * @version SDK: 1.7.0 | ThoughtSpot: 8.0.0.cl, 8.4.1.sw
      * @example
      *```js
      * searchEmbed.on(EmbedEvent.RouteChange, payload =>
@@ -628,7 +913,6 @@ var EmbedEvent;
     EmbedEvent["RouteChange"] = "ROUTE_CHANGE";
     /**
      * The v1 event type for Data
-     *
      * @hidden
      */
     EmbedEvent["V1Data"] = "exportVizDataToParent";
@@ -636,7 +920,6 @@ var EmbedEvent;
      * Emitted when the embed does not have cookie access. This happens
      * when Safari and other Web browsers block third-party cookies
      * are blocked by default. `NoCookieAccess` can trigger
-     *
      * @example
      *```js
      * appEmbed.on(EmbedEvent.NoCookieAccess)
@@ -646,14 +929,12 @@ var EmbedEvent;
     EmbedEvent["NoCookieAccess"] = "noCookieAccess";
     /**
      * Emitted when SAML is complete
-     *
      * @private
      * @hidden
      */
     EmbedEvent["SAMLComplete"] = "samlComplete";
     /**
      * Emitted when any modal is opened in the app
-     *
      * @version SDK: 1.6.0 | ThoughtSpot: ts8.nov.cl, 8.4.1.sw
      * @example
      *```js
@@ -665,7 +946,6 @@ var EmbedEvent;
     EmbedEvent["DialogOpen"] = "dialog-open";
     /**
      * Emitted when any modal is closed in the app
-     *
      * @version SDK: 1.6.0 | ThoughtSpot: ts8.nov.cl, 8.4.1.sw
      * @example
      *```js
@@ -679,7 +959,6 @@ var EmbedEvent;
      * Emitted when the Liveboard shell loads.
      * You can use this event as a hook to trigger
      * other events on the rendered Liveboard.
-     *
      * @version SDK: 1.9.1 | ThoughtSpot: 8.1.0.cl, 8.4.1.sw
      * @example
      *```js
@@ -699,9 +978,7 @@ var EmbedEvent;
      */
     EmbedEvent["LiveboardRendered"] = "PinboardRendered";
     /**
-     * This can be used to register an event listener which
-     * is triggered on all events.
-     *
+     * Emits all events.
      * @Version SDK: 1.10.0 | ThoughtSpot: 8.2.0.cl, 8.4.1.sw
      * @example
      *```js
@@ -713,17 +990,16 @@ var EmbedEvent;
     EmbedEvent["ALL"] = "*";
     /**
      * Emitted when an Answer is saved in the app
-     *
      * @Version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
-     * //trigger when action starts
+     * //Emit when action starts
      *  searchEmbed.on(EmbedEvent.Save, payload => {
      *    console.log('Save', payload)
      *  }, {
      *    start: true
      * })
-     * //trigger when action ends
+     * //emit when action ends
      * searchEmbed.on(EmbedEvent.Save, payload => {
      *    console.log('Save', payload)
      * })
@@ -737,11 +1013,10 @@ var EmbedEvent;
      * To fire an event when a download action is initiated on a chart or table,
      * use `EmbedEvent.DownloadAsPng`, `EmbedEvent.DownloadAsPDF`, `EmbedEvent.DownloadAsCSV`,
      * or `EmbedEvent.DownloadAsXLSX`
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
-     * liveboardEmbed.trigger(HostEvent.Download, {
+     * liveboardEmbed.on(EmbedEvent.Download, {
      * vizId: '730496d6-6903-4601-937e-2c691821af3c'
      * })
      *```
@@ -749,14 +1024,13 @@ var EmbedEvent;
     EmbedEvent["Download"] = "download";
     /**
      * Emitted when the download action is triggered on an answer
-     *
      * @version SDK: 1.21.0 | ThoughtSpot: 9.2.0.cl, 9.4.0.sw
      * @example
      *```js
-     * //trigger when action starts
+     * //emit when action starts
      * searchEmbed.on(EmbedEvent.DownloadAsPng, payload => {
      *   console.log('download PNG', payload)}, {start: true })
-     * //trigger when action ends
+     * //emit when action ends
      * searchEmbed.on(EmbedEvent.DownloadAsPng, payload => {
      *   console.log('download PNG', payload)})
      *```
@@ -764,14 +1038,13 @@ var EmbedEvent;
     EmbedEvent["DownloadAsPng"] = "downloadAsPng";
     /**
      * Emitted when the Download as PDF action is triggered on an answer
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
-     * //trigger when action starts
+     * //emit when action starts
      * searchEmbed.on(EmbedEvent.DownloadAsPdf, payload => {
      *   console.log('download PDF', payload)}, {start: true })
-     * //trigger when action ends
+     * //emit when action ends
      * searchEmbed.on(EmbedEvent.DownloadAsPdf, payload => {
      *   console.log('download PDF', payload)})
      *```
@@ -779,14 +1052,13 @@ var EmbedEvent;
     EmbedEvent["DownloadAsPdf"] = "downloadAsPdf";
     /**
      * Emitted when the Download as CSV action is triggered on an answer
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
-     * //trigger when action starts
+     * //emit when action starts
      * searchEmbed.on(EmbedEvent.DownloadAsCSV, payload => {
      *   console.log('download CSV', payload)}, {start: true })
-     * //trigger when action ends
+     * //emit when action ends
      * searchEmbed.on(EmbedEvent.DownloadAsCSV, payload => {
      *    console.log('download CSV', payload)})
      *```
@@ -794,14 +1066,13 @@ var EmbedEvent;
     EmbedEvent["DownloadAsCsv"] = "downloadAsCsv";
     /**
      * Emitted when the Download as XLSX action is triggered on an answer
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
-     * //trigger when action starts
+     * //emit when action starts
      * searchEmbed.on(EmbedEvent.DownloadAsXlsx, payload => {
      *   console.log('download Xlsx', payload)}, { start: true })
-     * //trigger when action ends
+     * //emit when action ends
      * searchEmbed.on(EmbedEvent.DownloadAsXlsx, payload => {
      *   console.log('download Xlsx', payload)})
      *```
@@ -809,11 +1080,10 @@ var EmbedEvent;
     EmbedEvent["DownloadAsXlsx"] = "downloadAsXlsx";
     /**
      * Emitted when an Answer is deleted in the app
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
-     * //trigger when action starts
+     * //emit when action starts
      * appEmbed.on(EmbedEvent.AnswerDelete, payload => {
      *    console.log('delete answer', payload)}, {start: true })
      * //trigger when action is completed
@@ -824,17 +1094,16 @@ var EmbedEvent;
     EmbedEvent["AnswerDelete"] = "answerDelete";
     /**
      * Emitted when an answer is pinned to a Liveboard
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
-     * //trigger when action starts
+     * //emit when action starts
      * searchEmbed.on(EmbedEvent.Pin, payload => {
      *    console.log('pin', payload)
      * }, {
      * start: true
      * })
-     * //trigger when action ends
+     * //emit when action ends
      * searchEmbed.on(EmbedEvent.Pin, payload => {
      *    console.log('pin', payload)
      * })
@@ -843,17 +1112,16 @@ var EmbedEvent;
     EmbedEvent["Pin"] = "pin";
     /**
      * Emitted when SpotIQ analysis is triggered
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
-     * //trigger when action starts
+     * //emit when action starts
      * searchEmbed.on(EmbedEvent.SpotIQAnalyze, payload => {
      *   console.log('SpotIQAnalyze', payload)
      * }, {
      * start: true
      * })
-     * //trigger when action ends
+     * //emit when action ends
      * searchEmbed.on(EmbedEvent.SpotIQAnalyze, payload => {
      *   console.log('SpotIQ analyze', payload)
      * })
@@ -862,17 +1130,16 @@ var EmbedEvent;
     EmbedEvent["SpotIQAnalyze"] = "spotIQAnalyze";
     /**
      * Emitted when a user shares an object with another user or group
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
-     * //trigger when action starts
+     * //emit when action starts
      * searchEmbed.on(EmbedEvent.Share, payload => {
      *    console.log('Share', payload)
      * }, {
      * start: true
      * })
-     * //trigger when action ends
+     * //emit when action ends
      * searchEmbed.on(EmbedEvent.Share, payload => {
      *   console.log('Share', payload)
      * })
@@ -882,7 +1149,6 @@ var EmbedEvent;
     /**
      * Emitted when a user clicks the **Include** action to include a specific value or
      * data on a chart or table.
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
@@ -895,7 +1161,6 @@ var EmbedEvent;
     /**
      * Emitted when a user clicks the **Exclude** action to exclude a specific value or
      * data on a chart or table
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
@@ -907,7 +1172,6 @@ var EmbedEvent;
     EmbedEvent["DrillExclude"] = "context-menu-item-exclude";
     /**
      * Emitted when a column value is copied in the embedded app.
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
@@ -918,7 +1182,8 @@ var EmbedEvent;
      */
     EmbedEvent["CopyToClipboard"] = "context-menu-item-copy-to-clipboard";
     /**
-     * Emitted when a user clicks the **Update TML** action
+     * Emitted when a user clicks the **Update TML** action on
+     * embedded Liveboard.
      *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
@@ -930,6 +1195,7 @@ var EmbedEvent;
     EmbedEvent["UpdateTML"] = "updateTSL";
     /**
      * Emitted when a user clicks the **Edit TML** action
+     * on an embedded Liveboard.
      *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
@@ -943,14 +1209,13 @@ var EmbedEvent;
     /**
      * Emitted when the **Export TML** action is triggered on an
      * an embedded object in the app
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
-     * //trigger when action starts
+     * //emit when action starts
      * searchEmbed.on(EmbedEvent.ExportTML, payload => {
      *     console.log('Export TML', payload)}, { start: true })
-     * //trigger when action ends
+     * //emit when action ends
      * searchEmbed.on(EmbedEvent.ExportTML, payload => {
      *     console.log('Export TML', payload)})
      *```
@@ -958,7 +1223,6 @@ var EmbedEvent;
     EmbedEvent["ExportTML"] = "exportTSL";
     /**
      * Emitted when an Answer is saved as a View.
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
@@ -970,14 +1234,13 @@ var EmbedEvent;
     EmbedEvent["SaveAsView"] = "saveAsView";
     /**
      * Emitted when the user creates a copy of an Answer
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
-     * //trigger when action starts
+     * //emit when action starts
      * appEmbed.on(EmbedEvent.CopyAEdit, payload => {
      *    console.log('Copy and edit', payload)}, {start: true })
-     * //trigger when action ends
+     * //emit when action ends
      * appEmbed.on(EmbedEvent.CopyAEdit, payload => {
      *    console.log('Copy and edit', payload)})
      *```
@@ -985,7 +1248,6 @@ var EmbedEvent;
     EmbedEvent["CopyAEdit"] = "copyAEdit";
     /**
      * Emitted when a user clicks Show underlying data on an Answer
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
@@ -997,7 +1259,6 @@ var EmbedEvent;
     EmbedEvent["ShowUnderlyingData"] = "showUnderlyingData";
     /**
      * Emitted when an answer is switched to a chart or table view.
-     *
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      * @example
      *```js
@@ -1009,13 +1270,11 @@ var EmbedEvent;
     EmbedEvent["AnswerChartSwitcher"] = "answerChartSwitcher";
     /**
      * Internal event to communicate the initial settings back to the ThoughtSpot app
-     *
      * @hidden
      */
     EmbedEvent["APP_INIT"] = "appInit";
     /**
      * Emitted when a user clicks **Show Liveboard details** on a Liveboard
-     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      * @example
      *```js
@@ -1027,7 +1286,6 @@ var EmbedEvent;
     EmbedEvent["LiveboardInfo"] = "pinboardInfo";
     /**
      * Emitted when a user clicks on the Favorite icon on a Liveboard
-     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      * @example
      *```js
@@ -1039,7 +1297,6 @@ var EmbedEvent;
     EmbedEvent["AddToFavorites"] = "addToFavorites";
     /**
      * Emitted when a user clicks **Schedule** on a Liveboard
-     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      * @example
      *```js
@@ -1051,7 +1308,6 @@ var EmbedEvent;
     EmbedEvent["Schedule"] = "subscription";
     /**
      * Emitted when a user clicks **Edit** on a Liveboard or visualization
-     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      * @example
      *```js
@@ -1063,7 +1319,6 @@ var EmbedEvent;
     EmbedEvent["Edit"] = "edit";
     /**
      * Emitted when a user clicks *Make a copy* on a Liveboard
-     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      * @example
      *```js
@@ -1075,11 +1330,10 @@ var EmbedEvent;
     EmbedEvent["MakeACopy"] = "makeACopy";
     /**
      * Emitted when a user clicks **Present** on a Liveboard or visualization
-     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      * @example
      *```js
-     * liveboardEmbed.trigger(HostEvent.Present)
+     * liveboardEmbed.on(EmbedEvent.Present)
      *```
      * @example
      *```js
@@ -1091,60 +1345,54 @@ var EmbedEvent;
     EmbedEvent["Present"] = "present";
     /**
      * Emitted when a user clicks **Delete** on a visualization
-     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      * @example
      *```js
-     * liveboardEmbed.trigger(EmbedEvent.Delete,
+     * liveboardEmbed.on(EmbedEvent.Delete,
      *   {vizId: '730496d6-6903-4601-937e-2c691821af3c'})
      *```
      */
     EmbedEvent["Delete"] = "delete";
     /**
      * Emitted when a user clicks Manage schedules on a Liveboard
-     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      * @example
      *```js
-     * liveboardEmbed.trigger(EmbedEvent.SchedulesList)
+     * liveboardEmbed.on(EmbedEvent.SchedulesList)
      *```
      */
     EmbedEvent["SchedulesList"] = "schedule-list";
     /**
      * Emitted when a user clicks **Cancel** in edit mode on a Liveboard
-     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      * @example
      *```js
-     * liveboardEmbed.trigger(EmbedEvent.Cancel)
+     * liveboardEmbed.on(EmbedEvent.Cancel)
      *```
      */
     EmbedEvent["Cancel"] = "cancel";
     /**
      * Emitted when a user clicks **Explore** on a visualization
-     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      * @example
      *```js
-     * liveboardEmbed.trigger(EmbedEvent.Explore,  {
+     * liveboardEmbed.on(EmbedEvent.Explore,  {
      *   vizId: '730496d6-6903-4601-937e-2c691821af3c'})
      *```
      */
     EmbedEvent["Explore"] = "explore";
     /**
      * Emitted when a user clicks **Copy link** action on a visualization
-     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      * @example
      *```js
-     * liveboardEmbed.trigger(EmbedEvent.CopyLink, {
+     * liveboardEmbed.on(EmbedEvent.CopyLink, {
      *   vizId: '730496d6-6903-4601-937e-2c691821af3c'})
      *```
      */
     EmbedEvent["CopyLink"] = "embedDocument";
     /**
      * Emitted when a user interacts with cross filters on a visualization or Liveboard
-     *
      * @version SDK: 1.21.0 | ThoughtSpot: 9.2.0.cl, 9.5.0.sw
      * @example
      *```js
@@ -1155,7 +1403,6 @@ var EmbedEvent;
     EmbedEvent["CrossFilterChanged"] = "cross-filter-changed";
     /**
      * Emitted when a user right clicks on a visualization (chart or table)
-     *
      * @version SDK: 1.21.0 | ThoughtSpot: 9.2.0.cl, 9.5.0.sw
      * @example
      *```js
@@ -1167,44 +1414,46 @@ var EmbedEvent;
     EmbedEvent["VizPointRightClick"] = "vizPointRightClick";
     /**
      * Emitted when a user clicks **Insert to slide** on a visualization
-     *
      * @hidden
      */
     EmbedEvent["InsertIntoSlide"] = "insertInToSlide";
     /**
-     * @hidden
      * Emitted when a user changes any filter on a Liveboard.
+     * Returns filter type and name, column name and ID, and runtime
+     * filter details.
+     * @example
+     *
+     *```js
+     * LiveboardEmbed.on(EmbedEvent.FilterChanged, (payload) => {
+     *    console.log('payload', payload);
+     * })
+     *
      * @version SDK: 1.23.0 | ThoughtSpot: 9.4.0.cl, 9.5.0.sw
      */
     EmbedEvent["FilterChanged"] = "filterChanged";
     /**
      *  Emitted when a user clicks the **Go** button on the Search page
-     *
      * @version SDK : 1.26.0 | Thoughtspot: 9.7.0.cl, 9.8.0.sw
      */
     EmbedEvent["SageEmbedQuery"] = "sageEmbedQuery";
     /**
      * Emitted when a user selects a data source.
-     *
      * @version SDK : 1.26.0 | Thoughtspot: 9.7.0.cl, 9.8.0.sw
      */
     EmbedEvent["SageWorksheetUpdated"] = "sageWorksheetUpdated";
     /**
      * Emitted when a user updates a connection on the **Data** page
-     *
      * @version SDK : 1.27.0 | Thoughtspot: 9.8.0.cl, 9.8.0.sw
      */
     EmbedEvent["UpdateConnection"] = "updateConnection";
     /**
      * Emitted when a user updates a connection on the **Data** page
-     *
      * @version SDK : 1.27.0 | Thoughtspot: 9.8.0.cl, 9.8.0.sw
      */
     EmbedEvent["CreateConnection"] = "createConnection";
     /**
      * Emitted when name, status (private or public) or filter values of a
      * Personalised view is updated.
-     *
      * @returns viewName: string
      * @returns viewId: string
      * @returns liveboardId: string
@@ -1214,7 +1463,6 @@ var EmbedEvent;
     EmbedEvent["UpdatePersonalisedView"] = "updatePersonalisedView";
     /**
      * Emitted when a Personalised view is saved.
-     *
      * @returns viewName: string
      * @returns viewId: string
      * @returns liveboardId: string
@@ -1224,7 +1472,6 @@ var EmbedEvent;
     EmbedEvent["SavePersonalisedView"] = "savePersonalisedView";
     /**
      * Emitted when a Liveboard is reset.
-     *
      * @returns viewName: string
      * @returns viewId: string
      * @returns liveboardId: string
@@ -1234,7 +1481,6 @@ var EmbedEvent;
     EmbedEvent["ResetLiveboard"] = "resetLiveboard";
     /**
      * Emitted when a PersonalisedView is deleted.
-     *
      * @returns views: string[]
      * @returns liveboardId: string
      * @version SDK : 1.26.0 | Thoughtspot: 9.7.0.cl, 9.8.0.sw
@@ -1242,13 +1488,11 @@ var EmbedEvent;
     EmbedEvent["DeletePersonalisedView"] = "deletePersonalisedView";
     /**
      * Emitted when a user creates a new worksheet
-     *
      * @version SDK : 1.27.0 | Thoughtspot: 9.8.0.cl
      */
     EmbedEvent["CreateWorksheet"] = "createWorksheet";
     /**
      * Emitted when Ask Sage is initialized.
-     *
      * @returns viewName: string
      * @returns viewId: string
      * @returns liveboardId: string
@@ -1258,10 +1502,39 @@ var EmbedEvent;
     EmbedEvent["AskSageInit"] = "AskSageInit";
     /**
      * Emitted when a LB/viz is renamed
-     *
      * @version SDK : 1.28.0 | ThoughtSpot: 9.10.5.cl
      */
     EmbedEvent["Rename"] = "rename";
+    /**
+     * Emitted when user wants to intercept the search execution
+     *
+     * Set IsOnBeforeGetVizDataInterceptEnabled : true to use
+     * this embed event
+     *
+     *```js
+     * searchEmbed.on(EmbedEvent.OnBeforeGetVizDataIntercept,
+     * (payload, responder) => {
+     *  responder({
+     *      data: {
+     *          execute: true,
+     *   }})
+     * })
+     *```
+     * @version SDK : 1.29.0 | Thoughtspot : 10.2.0.cl
+     */
+    EmbedEvent["OnBeforeGetVizDataIntercept"] = "onBeforeGetVizDataIntercept";
+    /**
+     * Emitted when parameter changes in an answer
+     * or liveboard
+     *
+     * ```js
+     * liveboardEmbed.on(EmbedEvent.ParameterChanged, (payload) => {
+     *     console.log('payload', payload);
+     * })
+     *```
+     * @version SDK : 1.29.0 | Thoughtspot : 10.2.0.cl
+     */
+    EmbedEvent["ParameterChanged"] = "parameterChanged";
 })(EmbedEvent || (EmbedEvent = {}));
 /**
  * Event types that can be triggered by the host application
@@ -1270,7 +1543,6 @@ var EmbedEvent;
  * To trigger an event use the corresponding
  * {@link LiveboardEmbed.trigger} or {@link AppEmbed.trigger} or {@link
  * SearchEmbed.trigger} method.
- *
  * @example
  * ```js
  * import { HostEvent } from '@thoughtspot/visual-embed-sdk';
@@ -1293,7 +1565,6 @@ var HostEvent;
      * the search query string.
      * Supported in `AppEmbed` and `SearchEmbed` deployments.
      * Includes the following properties:
-     *
      * @param - `searchQuery` - query string with search tokens
      * @param - `dataSources` - Data source GUID to Search on
      *                        - Although an array, only a single source
@@ -1312,7 +1583,6 @@ var HostEvent;
     /**
      * Triggers a drill on certain points of the specified column
      * Includes the following properties:
-     *
      * @param - points - an object containing selectedPoints/clickedPoints
      * to drill to. For example, { selectedPoints: []}
      * @param - columnGuid - Optional. GUID of the column to drill
@@ -1362,19 +1632,16 @@ var HostEvent;
     HostEvent["DrillDown"] = "triggerDrillDown";
     /**
      * Apply filters
-     *
      * @hidden
      */
     HostEvent["Filter"] = "filter";
     /**
      * Reload the answer or visualization
-     *
      * @hidden
      */
     HostEvent["Reload"] = "reload";
     /**
      * Display specific visualizations on a Liveboard.
-     *
      * @param - An array of GUIDs of the visualization to show. The visualization IDs not passed
      *  in this parameter will be hidden.
      * @example
@@ -1388,7 +1655,6 @@ var HostEvent;
     HostEvent["SetVisibleVizs"] = "SetPinboardVisibleVizs";
     /**
      * Set a Liveboard tab as an active tab.
-     *
      * @param - tabId - string of id of Tab to show
      * @example
      * ```js
@@ -1404,18 +1670,21 @@ var HostEvent;
      * runtime filters passed here are appended to the existing runtime
      * filters.
      * Pass an array of runtime filters with the following attributes:
+     *
      * `columnName`
      * _String_. The name of the column to filter on.
-     * `operator`
-     *  Runtime filter operator to apply. For information,
-     *  see https://developers.thoughtspot.com/docs/?pageid=runtime-filters#rtOperator.
-     * `values`
-     *  List of operands. Some operators such as EQ, LE allow a single value, whereas
-     *  operators such as BW and IN accept multiple operands.
-     *  **Note**: `HostEvent.UpdateRuntimeFilters` is not supported in
-     *  Search embedding (SearchEmbed) and Natural Language Search
-     *  embedding (SageEmbed).
      *
+     * `operator`
+     * Runtime filter operator to apply. For information,
+     * see link:https://developers.thoughtspot.com/docs/?pageid=runtime-filters#rtOperator[Developer Documentation].
+     *
+     * `values`
+     * List of operands. Some operators such as EQ, LE allow a single value, whereas
+     * operators such as BW and IN accept multiple operands.
+     *
+     * **Note**: `HostEvent.UpdateRuntimeFilters` is not supported in
+     * Search embedding (SearchEmbed) and Natural Language Search
+     * embedding (SageEmbed).
      * @param - {@link RuntimeFilter}[] an array of {@link RuntimeFilter} Types.
      * @example
      * ```js
@@ -1431,7 +1700,6 @@ var HostEvent;
     /**
      * Navigate to a specific page in the embedded ThoughtSpot application.
      * This is the same as calling `appEmbed.navigateToPage(path, true)`
-     *
      * @param - `path` - the path to navigate to to go forward or back. The path value can
      * be a number; for example, `1`, `-1`.
      * @example
@@ -1444,7 +1712,6 @@ var HostEvent;
     /**
      * Open the filter panel for a particular column.
      * Works with Search and Liveboard embed.
-     *
      * @param - { columnId: string,
      *  name: string,
      *  type: INT64/CHAR/DATE,
@@ -1461,7 +1728,6 @@ var HostEvent;
     HostEvent["OpenFilter"] = "openFilter";
     /**
      * Add columns to the current search query.
-     *
      * @param - { columnIds: string[] }
      * @example
      * ```js
@@ -1472,7 +1738,6 @@ var HostEvent;
     HostEvent["AddColumns"] = "addColumns";
     /**
      * Remove a column from the current search query.
-     *
      * @param - { columnId: string }
      * @example
      * ```js
@@ -1487,10 +1752,9 @@ var HostEvent;
      * Liveboard filters, runtime filters applied on visualizations on a
      * Liveboard, and Liveboard layout, changes to visualizations such as
      * sorting, toggling of legends, and data drill down.
-     *
      * @example
      * ```js
-     * liveboardEmbed.trigger(HostEvent.getexportrequestforcurrentpinboard).then(
+     * liveboardEmbed.trigger(HostEvent.getExportRequestForCurrentPinboard).then(
      * data=>console.log(data))
      * ```
      * @version SDK: 1.13.0 | ThoughtSpot: 8.5.0.cl, 8.8.1.sw
@@ -1498,7 +1762,6 @@ var HostEvent;
     HostEvent["getExportRequestForCurrentPinboard"] = "getExportRequestForCurrentPinboard";
     /**
      * Trigger the **Pin** action on an embedded object
-     *
      * @param - Liveboard embed takes the `vizId` as a
      * key. Can be left undefined when embedding Search, full app, or
      * a visualization.
@@ -1515,7 +1778,6 @@ var HostEvent;
     /**
      * Trigger the **Show Liveboard details** action
      * on an embedded Liveboard.
-     *
      * @example
      *```js
      * liveboardEmbed.trigger(HostEvent.LiveboardInfo)
@@ -1525,7 +1787,6 @@ var HostEvent;
     HostEvent["LiveboardInfo"] = "pinboardInfo";
     /**
      * Trigger the **Schedule** action on an embedded Liveboard.
-     *
      * @example
      * ```js
      *  liveboardEmbed.trigger(HostEvent.Schedule)
@@ -1535,7 +1796,6 @@ var HostEvent;
     HostEvent["Schedule"] = "subscription";
     /**
      * Trigger the **Manage schedule** action on an embedded Liveboard
-     *
      * @example
      * ```js
      *  liveboardEmbed.trigger(HostEvent.ScheduleList)
@@ -1544,17 +1804,21 @@ var HostEvent;
      */
     HostEvent["SchedulesList"] = "schedule-list";
     /**
-     * Trigger the **Export TML** action on an embedded Liveboard.
+     * Trigger the **Export TML** action on an embedded Liveboard or
+     * Answer.
      *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.ExportTML)
      * ```
+     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      */
     HostEvent["ExportTML"] = "exportTSL";
     /**
-     * Trigger the **Edit TML** action on an embedded Liveboard.
+     * Trigger the **Edit TML** action on an embedded Liveboard or
+     * saved Answers in the full application embedding.
+     *
      *
      * @example
      * ```js
@@ -1565,7 +1829,6 @@ var HostEvent;
     HostEvent["EditTML"] = "editTSL";
     /**
      * Trigger the **Update TML** action on an embedded Liveboard.
-     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.UpdateTML)
@@ -1574,8 +1837,11 @@ var HostEvent;
      */
     HostEvent["UpdateTML"] = "updateTSL";
     /**
-     * Trigger the **Download PDF** action on an embedded Liveboard.
+     * Trigger the **Download PDF** action on an embedded Liveboard,
+     * visualization or Answer.
      *
+     * **NOTE**: The **Download** > **PDF** action is available on
+     * visualizations and Answers if the data is in tabular format.
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.DownloadAsPdf)
@@ -1584,25 +1850,35 @@ var HostEvent;
      */
     HostEvent["DownloadAsPdf"] = "downloadAsPdf";
     /**
-     * Trigger the **Make a copy** action on a Liveboard, Search, or
-     * visualization page.
+     * Trigger the **Make a copy** action on a Liveboard,
+     * visualization, or Answer page.
      *
      * @example
      * ```js
-     * liveboardEmbed.trigger(HostEvent.MakeACopy, {vizId: '730496d6-6903-4601-937e-2c691821af3c'})
+     * liveboardEmbed.trigger(HostEvent.MakeACopy)
      * ```
+     *
+     * @example
+     * ```js
+     * liveboardEmbed.trigger(HostEvent.MakeACopy, {
+     * vizId: '730496d6-6903-4601-937e-2c691821af3c'})
+     * ```
+     *
+     * @example
      * ```js
      * vizEmbed.trigger(HostEvent.MakeACopy)
      * ```
+     *
+     * @example
      * ```js
      * searchEmbed.trigger(HostEvent.MakeACopy)
      * ```
+     *
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      */
     HostEvent["MakeACopy"] = "makeACopy";
     /**
      * Trigger the **Delete** action for a Liveboard.
-     *
      * @example
      * ```js
      * appEmbed.trigger(HostEvent.Remove)
@@ -1612,7 +1888,6 @@ var HostEvent;
     HostEvent["Remove"] = "delete";
     /**
      * Trigger the **Explore** action on a visualization.
-     *
      * @param - an object with `vizId` as a key
      * @example
      * ```js
@@ -1622,7 +1897,8 @@ var HostEvent;
      */
     HostEvent["Explore"] = "explore";
     /**
-     * Trigger the **Create alert** action on a visualization
+     * Trigger the **Create alert** action on a KPI chart
+     * in a Liveboard or saved Answer.
      *
      * @param - an object with `vizId` as a key
      * @example
@@ -1631,11 +1907,17 @@ var HostEvent;
      *  vizId: '730496d6-6903-4601-937e-2c691821af3c'
      * })
      * ```
+     *
+     * @example
+     * ```js
+     * searchEmbed.trigger(HostEvent.CreateMonitor)
+     * ```
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      */
     HostEvent["CreateMonitor"] = "createMonitor";
     /**
-     * Trigger the **Manage alerts** action on a visualization
+     * Trigger the **Manage alerts** action on a KPI chart
+     * in a visualization or saved Answer.
      *
      * @param - an object with `vizId` as a key
      * @example
@@ -1644,16 +1926,27 @@ var HostEvent;
      *  vizId: '730496d6-6903-4601-937e-2c691821af3c'
      * })
      * ```
+     *
+     * @example
+     * ```js
+     * searchEmbed.trigger(HostEvent.ManageMonitor)
+     * ```
+     *
+     * @example
+     * ```js
+     * vizEmbed.trigger(HostEvent.ManageMonitor)
+     * ```
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      */
     HostEvent["ManageMonitor"] = "manageMonitor";
     /**
-     * Trigger the **Edit** action on a Liveboard or visualization
+     * Trigger the **Edit** action on a Liveboard or a visualization
+     * on a Liveboard.
      *
+     * This event is not supported in visualization embed and search embed.
      * @param - object - To trigger the action for a specific visualization
      * in Liveboard embed, pass in `vizId` as a key.
-     * Can be left undefined when embedding Search, full app, or
-     * a visualization.
+     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.Edit)
@@ -1662,15 +1955,11 @@ var HostEvent;
      * liveboardEmbed.trigger(HostEvent.Edit, {vizId:
      * '730496d6-6903-4601-937e-2c691821af3c'})
      * ```
-     * ```js
-     * vizEmbed.trigger((HostEvent.Edit)
-     * ```
      * @version SDK: 1.15.0 | ThoughtSpot: 8.7.0.cl, 8.8.1.sw
      */
     HostEvent["Edit"] = "edit";
     /**
      * Trigger the **Copy link** action on a Liveboard or visualization
-     *
      * @param - object - to trigger the action for a
      * specific visualization in Liveboard embed, pass in `vizId` as a key
      * @example
@@ -1688,7 +1977,6 @@ var HostEvent;
     HostEvent["CopyLink"] = "embedDocument";
     /**
      * Trigger the **Present** action on a Liveboard or visualization
-     *
      * @param - object - to trigger the action for a specific visualization
      *  in Liveboard embed, pass in `vizId` as a key
      * @example
@@ -1706,12 +1994,11 @@ var HostEvent;
     HostEvent["Present"] = "present";
     /**
      * Get TML for the current search.
-     *
      * @example
      * ```js
      * searchEmbed.trigger(HostEvent.GetTML).then((tml) => {
      *   console.log(
-     *      tml.search_query // TML representation of the search query
+     *      tml.answer.search_query // TML representation of the search query
      *   );
      * })
      * ```
@@ -1721,7 +2008,6 @@ var HostEvent;
     HostEvent["GetTML"] = "getTML";
     /**
      * Trigger the **Show underlying data** action on visualization or search
-     *
      * @param - an object with vizId as a key
      * @example
      * ```js
@@ -1741,7 +2027,6 @@ var HostEvent;
      * Trigger the **Delete** action for a visualization
      * in an embedded Liveboard, or a chart or table
      * generated from Search.
-     *
      * @param - Liveboard embed takes an object with `vizId` as a key.
      * Can be left empty if embedding Search or visualization.
      * @example
@@ -1758,7 +2043,6 @@ var HostEvent;
     /**
      * Trigger the **SpotIQ analyze** action on visualization
      * or search.
-     *
      * @param - Liveboard embed takes `vizId` as a
      * key. Can be left undefined when embedding Search or
      * visualization.
@@ -1779,7 +2063,6 @@ var HostEvent;
     /**
      * Trigger the **Download** action on charts in
      * the embedded view.
-     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.Download, {vizId:
@@ -1796,7 +2079,6 @@ var HostEvent;
     /**
      * Trigger the **Download** > **PNG** action on
      * charts in the embedded view.
-     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.DownloadAsPng,
@@ -1812,7 +2094,6 @@ var HostEvent;
     /**
      * Trigger the **Download** > **CSV**  action on tables in
      * the embedded view.
-     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.DownloadAsCsv, {vizId:
@@ -1830,7 +2111,6 @@ var HostEvent;
     /**
      * Trigger the **Download** > **XLSX**  action on tables
      * in the embedded view.
-     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.DownloadAsXlsx, {vizId:
@@ -1848,7 +2128,6 @@ var HostEvent;
     /**
      * Trigger the **Share** action on an embedded
      * Liveboard or Answer.
-     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.Share)
@@ -1862,7 +2141,6 @@ var HostEvent;
     /**
      * Trigger the **Save**  action on a Liveboard or Answer.
      * Saves the changes.
-     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.Save)
@@ -1876,7 +2154,6 @@ var HostEvent;
     /**
      * Trigger the **Sync to Sheets** action on an embedded visualization or Answer
      * Sends data from an Answer or Liveboard visualization to a Google sheet.
-     *
      * @param - an object with `vizId` as a key
      * @example
      * ```js
@@ -1893,7 +2170,6 @@ var HostEvent;
      * Trigger the **Sync to Other Apps** action on an embedded visualization or Answer
      * Sends data from an Answer or Liveboard visualization to third-party apps such
      * as Slack, Salesforce, Microsoft Teams, ServiceNow and so on.
-     *
      * @param - an object with vizId as a key
      * @example
      * ```js
@@ -1910,7 +2186,6 @@ var HostEvent;
      * Trigger the **Manage pipelines** action on an embedded
      * visualization or Answer.
      * Allows users to manage ThoughtSpot Sync pipelines.
-     *
      * @param - an object with `vizId` as a key
      * @example
      * ```js
@@ -1925,7 +2200,6 @@ var HostEvent;
     HostEvent["ManagePipelines"] = "manage-pipeline";
     /**
      * Reset search operation on the Search or Answer page.
-     *
      * @example
      * ```js
      * searchEmbed.trigger(HostEvent.ResetSearch)
@@ -1937,32 +2211,72 @@ var HostEvent;
      */
     HostEvent["ResetSearch"] = "resetSearch";
     /**
-     *
-     * Get the currents visible and runtime filters applied on a Liveboard
+     * Get details of filters applied on the Liveboard.
+     * Returns arrays containing Liveboard filter and runtime filter elements.
      *
      * @example
-     * liveboardEmbed.trigger(HostEvent.GetFilters)
+     * ```js
+     * const data = await liveboardEmbed.trigger(HostEvent.GetFilters);
+     *     console.log('data', data);
+     * ```
      * @version SDK: 1.23.0 | ThoughtSpot: 9.4.0.cl
      */
     HostEvent["GetFilters"] = "getFilters";
     /**
+     * Update one or several filters applied on a Liveboard.
+     * @param - `filter`: a single filter object containing column name,
+     * filter operator, and values.
+     * @param - `filters`: multiple filter objects with column name, filter operator,
+     * and values for each.
      *
-     * Update the visible filters on the Liveboard.
+     * Each filter object must include the following attributes:
      *
-     * @param - filter: filter object containing column name and filter operation and values
+     * `column` - Name of the column to filter on.
+     *
+     * `oper`  - Filter operator, for example, EQ, IN, CONTAINS.
+     *  For information about the supported filter operators,
+     *  see link:https://developers.thoughtspot.com/docs/runtime-filters#rtOperator[Developer Documentation].
+     *
+     * `values` - An array of one or several values. The value definition on the
+     *  data type you choose to filter on. For a complete list of supported data types,
+     *  see link:https://developers.thoughtspot.com/docs/runtime-filters#_supported_data_types[Developer Documentation].
+     * @example
+     * ```js
+     *
+     * liveboardEmbed.trigger(HostEvent.UpdateFilters, {
+     *     filter: {
+     *         column: "item type",
+     *         oper: "IN",
+     *         values: ["bags","shirts"],
+     *        }
+     *    });
+     * ```
      * @example
      *
      * ```js
      * liveboardEmbed.trigger(HostEvent.UpdateFilters, {
-     *  filter: { column: 'column name', oper: 'IN', values: [1,2,3], is_mandatory: false }
-     * })
+     *  filters: [{
+     *      column: "Item Type",
+     *      oper: 'IN',
+     *      values: ["bags","shirts"]
+     *  },
+     *    {
+     *      column: "Region",
+     *      oper: 'IN',
+     *      values: ["West","Midwest"]
+     *  },
+     *    {
+     *      column: "Date",
+     *      oper: 'EQ',
+     *      values: ["1656680400"]
+     *    }]
+     * });
      * ```
      * @version SDK: 1.23.0 | ThoughtSpot: 9.4.0.cl
      */
     HostEvent["UpdateFilters"] = "updateFilters";
     /**
      * Get tab details for the current Liveboard.
-     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.GetTabs).then((tabDetails) => {
@@ -1976,7 +2290,6 @@ var HostEvent;
     HostEvent["GetTabs"] = "getTabs";
     /**
      * Set the visible tabs on a Liveboard.
-     *
      * @param - an array of ids of tabs to show, the IDs not passed
      *          will be hidden.
      * @example
@@ -1990,7 +2303,6 @@ var HostEvent;
     HostEvent["SetVisibleTabs"] = "SetPinboardVisibleTabs";
     /**
      * Set the hidden tabs on a Liveboard.
-     *
      * @param - an array of the IDs of the tabs to hide.
      * The IDs not passed will be shown.
      * @example
@@ -2004,7 +2316,6 @@ var HostEvent;
     HostEvent["SetHiddenTabs"] = "SetPinboardHiddenTabs";
     /**
      * Updates the search query string for Natural Language Search operations.
-     *
      * @param - `queryString`: Text string in Natural Language format
      * @param - `executeSearch`: Boolean to execute search and update search query
      * @example
@@ -2018,7 +2329,8 @@ var HostEvent;
      */
     HostEvent["UpdateSageQuery"] = "updateSageQuery";
     /**
-     * Get the answer session for a Search / Visualization.
+     * Get the answer session for a Search or
+     * Liveboard visualization.
      *
      * @example
      * ```js
@@ -2027,12 +2339,17 @@ var HostEvent;
      *      vizId: '123', // For Liveboard Visualization.
      *  })
      * ```
+     *
+     * @example
+     * ```js
+     * const {session} = await embed.trigger( HostEvent.GetAnswerSession )
+     * ```
+     *
      * @version SDK: 1.26.0 | Thoughtspot: 9.10.0.cl
      */
     HostEvent["GetAnswerSession"] = "getAnswerSession";
     /**
      * Trigger Ask Sage for viz
-     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.AskSage,
@@ -2043,7 +2360,6 @@ var HostEvent;
     HostEvent["AskSage"] = "AskSage";
     /**
      * Trigger UpdateCrossFilter for Liveboard
-     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.UpdateCrossFilter, {
@@ -2059,7 +2375,6 @@ var HostEvent;
     HostEvent["UpdateCrossFilter"] = "UpdateCrossFilter";
     /**
      * Trigger ResetLiveboardPersonalisedView for Liveboard
-     *
      * @example
      * ```js
      * liveboardEmbed.trigger(HostEvent.ResetLiveboardPersonalisedView);
@@ -2067,6 +2382,28 @@ var HostEvent;
      * @version SDK: 1.29.0 | Thoughtspot: 10.1.0.cl
      */
     HostEvent["ResetLiveboardPersonalisedView"] = "ResetLiveboardPersonalisedView";
+    /**
+     * Triggers Update RuntimeParameters for answers and liveboard
+     * @example
+     * ```js
+     * liveboardEmbed.trigger(HostEvent.UpdateParameters, [{
+     * name: "Color",
+     * value: "almond"
+     * }])
+     *
+     * @version SDK: 1.29.0 | Thoughtspot: 10.1.0.cl
+     */
+    HostEvent["UpdateParameters"] = "UpdateParameters";
+    /**
+     * Triggers GetParameters to fetch the runtime parameters
+     * ```js
+     * liveboardEmbed.trigger(HostEvent.GetParameters).then((parameter) => {
+     *  console.log('parameters', parameter);
+     * });
+     *```
+     * @version SDK: 1.29.0 | Thoughtspot: 10.1.0.cl
+     */
+    HostEvent["GetParameters"] = "GetParameters";
 })(HostEvent || (HostEvent = {}));
 /**
  * The different visual modes that the data sources panel within
@@ -2168,6 +2505,17 @@ var Param;
     Param["ClientLogLevel"] = "clientLogLevel";
     Param["OverrideNativeConsole"] = "overrideConsoleLogs";
     Param["enableAskSage"] = "enableAskSage";
+    Param["CollapseSearchBarInitially"] = "collapseSearchBarInitially";
+    Param["DataPanelCustomGroupsAccordionInitialState"] = "dataPanelCustomGroupsAccordionInitialState";
+    Param["EnableCustomColumnGroups"] = "enableCustomColumnGroups";
+    Param["DateFormatLocale"] = "dateFormatLocale";
+    Param["NumberFormatLocale"] = "numberFormatLocale";
+    Param["CurrencyFormat"] = "currencyFormat";
+    Param["Enable2ColumnLayout"] = "enable2ColumnLayout";
+    Param["IsFullAppEmbed"] = "isFullAppEmbed";
+    Param["IsOnBeforeGetVizDataInterceptEnabled"] = "isOnBeforeGetVizDataInterceptEnabled";
+    Param["FocusSearchBarOnRender"] = "focusSearchBarOnRender";
+    Param["DisableRedirectionLinksInNewTab"] = "disableRedirectionLinksInNewTab";
 })(Param || (Param = {}));
 /**
  * ThoughtSpot application pages include actions and menu commands
@@ -2176,7 +2524,6 @@ var Param;
  * specific actions in the embedded view, define the Action
  * enumeration members in the `disabledActions`, `visibleActions`,
  * or `hiddenActions` array.
- *
  * @example
  * ```js
  * const embed = new LiveboardEmbed('#embed-container', {
@@ -2202,10 +2549,9 @@ var Action;
     /**
      * The **Save** action on an Answer or Liveboard.
      * Allows users to save the changes.
-     *
      * @example
      * ```js
-     * disabledActions: [Action.SaveAsView]
+     * disabledActions: [Action.Save]
      * ```
      */
     Action["Save"] = "save";
@@ -2219,7 +2565,8 @@ var Action;
     Action["SaveUntitled"] = "saveUntitled";
     /**
      * The **Save as View** action on the Answer
-     * page. Saves an Answer as a View object.
+     * page. Saves an Answer as a View object in the full
+     * application embedding mode.
      *
      * @example
      * ```js
@@ -2234,7 +2581,6 @@ var Action;
      * visualizations in the embedded Liveboard view.
      * In AppEmbed, the **Make a copy** action is available on both
      * Liveboards and visualizations.
-     *
      * @example
      * ```js
      * disabledActions: [Action.MakeACopy]
@@ -2244,7 +2590,6 @@ var Action;
     /**
      * The **Copy and Edit** action on a Liveboard.
      * This action is now replaced with `Action.MakeACopy`.
-     *
      * @example
      * ```js
      * disabledActions: [Action.EditACopy]
@@ -2254,7 +2599,6 @@ var Action;
     /**
      * The **Copy link** menu action on a Liveboard visualization.
      * Copies the visualization URL
-     *
      * @example
      * ```js
      * disabledActions: [Action.CopyLink]
@@ -2268,7 +2612,6 @@ var Action;
     /**
      * The **Schedule** menu action on a Liveboard.
      * Allows scheduling a Liveboard notification.
-     *
      * @example
      * ```js
      * disabledActions: [Action.Schedule]
@@ -2278,7 +2621,6 @@ var Action;
     /**
      * The **Manage schedules** menu action on a Liveboard.
      * Allows users to manage scheduled Liveboard jobs.
-     *
      * @example
      * ```js
      * disabledActions: [Action.SchedulesList]
@@ -2288,7 +2630,6 @@ var Action;
     /**
      * The **Share** action on a Liveboard, Answer, or Worksheet.
      * Allows users to share an object with other users and groups.
-     *
      * @example
      * ```js
      * disabledActions: [Action.Share]
@@ -2298,7 +2639,6 @@ var Action;
     /**
      * The **Add filter** action on a Liveboard and Search page.
      * Allows adding filters to Answers and visualizations on a Liveboard.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AddFilter]
@@ -2306,10 +2646,20 @@ var Action;
      */
     Action["AddFilter"] = "addFilter";
     /**
+     * The **Add Data Panel Objects** action on the data panel v2.
+     * Allows to show action menu to add different objects (like
+     * formulas, parameters) in data panel v2.
+     * @example
+     * ```js
+     * disabledActions: [Action.AddDataPanelObjects]
+     * ```
+     * @version SDK: 1.32.0 | Thoughtspot: 10.0.0.cl
+     */
+    Action["AddDataPanelObjects"] = "addDataPanelObjects";
+    /**
      * Filter configuration options on a Liveboard and Search page.
      * Allows configuring filter options when adding filters to a
      * Liveboard or Answer.
-     *
      * @example
      * ```js
      * disabledActions: [Action.ConfigureFilter]
@@ -2317,10 +2667,10 @@ var Action;
      */
     Action["ConfigureFilter"] = "configureFilter";
     Action["CollapseDataSources"] = "collapseDataSources";
+    Action["CollapseDataPanel"] = "collapseDataPanel";
     /**
      * The **Choose sources** button on Search page.
      * Allows selecting data sources for search queries.
-     *
      * @example
      * ```js
      * disabledActions: [Action.ChooseDataSources]
@@ -2330,7 +2680,6 @@ var Action;
     /**
      * The **Create formula** action on a Search or Answer page.
      * Allows adding formulas to an Answer.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AddFormula]
@@ -2340,7 +2689,6 @@ var Action;
     /**
      * The **Add parameter** action on a Liveboard or Answer.
      * Allows adding Parameters to a Liveboard or Answer.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AddParameter]
@@ -2348,13 +2696,32 @@ var Action;
      */
     Action["AddParameter"] = "addParameter";
     /**
+     * The **Add Column Set** action on a Answer.
+     * Allows adding column sets to a Answer.
+     * @example
+     * ```js
+     * disabledActions: [Action.AddColumnSet]
+     * ```
+     * @version SDK: 1.32.0 | Thoughtspot: 10.0.0.cl
+     */
+    Action["AddColumnSet"] = "addSimpleCohort";
+    /**
+     * The **Add Query Set** action on a Answer.
+     * Allows adding query sets to a Answer.
+     * @example
+     * ```js
+     * disabledActions: [Action.AddQuerySet]
+     * ```
+     * @version SDK: 1.32.0 | Thoughtspot: 10.0.0.cl
+     */
+    Action["AddQuerySet"] = "addAdvancedCohort";
+    /**
      * @hidden
      */
     Action["SearchOnTop"] = "searchOnTop";
     /**
      * The **SpotIQ analyze** menu action on a visualization or
      * Answer page.
-     *
      * @example
      * ```js
      * disabledActions: [Action.SpotIQAnalyze]
@@ -2377,7 +2744,6 @@ var Action;
     /**
      * The **Show underlying data** menu action on a visualization or
      * Answer page.
-     *
      * @example
      * ```js
      * disabledActions: [Action.ShowUnderlyingData]
@@ -2388,7 +2754,6 @@ var Action;
      * The **Download** menu action on Liveboard visualizations
      * and Answers.
      * Allows downloading a visualization or Answer.
-     *
      * @example
      * ```js
      * disabledActions: [Action.DownloadAsPng]
@@ -2399,7 +2764,6 @@ var Action;
      * The **Download** > **PNG** menu action for charts on a Liveboard
      * or Answer page.
      * Downloads a visualization or Answer as a PNG file.
-     *
      * @example
      * ```js
      * disabledActions: [Action.DownloadAsPng]
@@ -2407,9 +2771,13 @@ var Action;
      */
     Action["DownloadAsPng"] = "downloadAsPng";
     /**
-     * The **Download** > **PDF** menu action on a Liveboard.
-     * Downloads a visualization or Answer as a PDF file.
      *
+     *The **Download PDF** action that downloads a Liveboard,
+     *visualization, or Answer as a PDF file.
+     *
+     *
+     ***NOTE**: The **Download** > **PDF** action is available on
+     *visualizations and Answers if the data is in tabular format.
      * @example
      * ```js
      * disabledActions: [Action.DownloadAsPdf]
@@ -2420,7 +2788,6 @@ var Action;
      * The **Download** > **CSV** menu action for tables on a Liveboard
      * or Answer page.
      * Downloads a visualization or Answer in the XLSX format.
-     *
      * @example
      * ```js
      * disabledActions: [Action.DownloadAsCsv]
@@ -2431,7 +2798,6 @@ var Action;
      * The **Download** > **XLSX** menu action for tables on a Liveboard
      * or Answer page.
      * Downloads a visualization or Answer in the XLSX format.
-     *
      * @example
      * ```js
      * disabledActions: [Action.DownloadAsXlsx]
@@ -2446,7 +2812,6 @@ var Action;
      * The **Export TML** menu action on Liveboard, Answers
      * Worksheets and Data Connections page.
      * Exports an object as a TML file.
-     *
      * @example
      * ```js
      * disabledActions: [Action.ExportTML]
@@ -2456,7 +2821,6 @@ var Action;
     /**
      * The **Import TML** menu action for Liveboards and Answers.
      * Imports TML representation of ThoughtSpot objects.
-     *
      * @example
      * ```js
      * disabledActions: [Action.ImportTML]
@@ -2466,7 +2830,6 @@ var Action;
     /**
      * The **Update TML** menu action for Liveboards and Answers.
      * Update TML representation of ThoughtSpot objects.
-     *
      * @example
      * ```js
      * disabledActions: [Action.UpdateTML]
@@ -2476,7 +2839,6 @@ var Action;
     /**
      * The **Edit TML** menu action for Liveboards and Answers.
      * Opens the TML editor.
-     *
      * @example
      * ```js
      * disabledActions: [Action.EditTML]
@@ -2487,7 +2849,6 @@ var Action;
      * The **Present** menu action for Liveboards and Answers.
      * Allows presenting a Liveboard or visualization in
      * slideshow mode.
-     *
      * @example
      * ```js
      * disabledActions: [Action.Present]
@@ -2497,7 +2858,6 @@ var Action;
     /**
      * The tile resize options in the visualization menu.
      * Allows switching between different preset layouts.
-     *
      * @example
      * ```js
      * disabledActions: [Action.ToggleSize]
@@ -2508,7 +2868,6 @@ var Action;
      * The *Edit* action on the Liveboard page and in the
      * visualization menu.
      * Opens a Liveboard or visualization in edit mode.
-     *
      * @example
      * ```js
      * disabledActions: [Action.Edit]
@@ -2517,7 +2876,6 @@ var Action;
     Action["Edit"] = "edit";
     /**
      * The text edit option for Liveboard and visualization titles.
-     *
      * @example
      * ```js
      * disabledActions: [Action.EditTitle]
@@ -2527,7 +2885,6 @@ var Action;
     /**
      * The **Delete** menu action on Liveboards and visualizations.
      * Deletes a Liveboard or a visualization from a Liveboard.
-     *
      * @example
      * ```js
      * disabledActions: [Action.Remove]
@@ -2559,7 +2916,6 @@ var Action;
      * Displays details such as the name, description, and
      * author of the Liveboard, and timestamp of Liveboard creation
      * and update.
-     *
      * @example
      * ```js
      * disabledActions: [Action.LiveboardInfo]
@@ -2577,7 +2933,6 @@ var Action;
     /**
      * The **Pin** menu action on an Answer or
      * Search results page.
-     *
      * @example
      * ```js
      * disabledActions: [Action.Pin]
@@ -2590,7 +2945,6 @@ var Action;
     Action["AnalysisInfo"] = "analysisInfo";
     /**
      * The **Schedule** menu action on a Liveboard.
-     *
      * @example
      * ```js
      * disabledActions: [Action.Subscription]
@@ -2599,7 +2953,6 @@ var Action;
     Action["Subscription"] = "subscription";
     /**
      * The **Explore** action on Liveboard visualizations
-     *
      * @example
      * ```js
      * disabledActions: [Action.Explore]
@@ -2609,7 +2962,6 @@ var Action;
     /**
      * The action to include data points on a drilled-down Answer
      * or visualization
-     *
      * @example
      * ```js
      * disabledActions: [Action.DrillInclude]
@@ -2619,7 +2971,6 @@ var Action;
     /**
      * The action to exclude data points on a drilled-down Answer
      * or visualization
-     *
      * @example
      * ```js
      * disabledActions: [Action.DrillInclude]
@@ -2630,7 +2981,6 @@ var Action;
      * The **Copy to clipboard** menu action on tables in an Answer
      * or Liveboard.
      * Copies the selected data point.
-     *
      * @example
      * ```js
      * disabledActions: [Action.CopyToClipboard]
@@ -2648,7 +2998,6 @@ var Action;
      * The **Drill down** menu action on Answers and Liveboard
      * visualizations.
      * Allows drilling down to a specific data point on a chart or table.
-     *
      * @example
      * ```js
      * disabledActions: [Action.DrillDown]
@@ -2658,7 +3007,6 @@ var Action;
     /**
      * The request access action on Liveboards.
      * Allows users with view permissions to request edit access to a Liveboard.
-     *
      * @example
      * ```js
      * disabledActions: [Action.RequestAccess]
@@ -2668,7 +3016,6 @@ var Action;
     /**
      * The **Query visualizer** and **Query SQL** buttons in Query details panel
      * of the Answer page
-     *
      * @example
      * ```js
      * disabledActions: [Action.QueryDetailsButtons]
@@ -2676,7 +3023,8 @@ var Action;
      */
     Action["QueryDetailsButtons"] = "queryDetailsButtons";
     /**
-     * The **Delete** action for Answers.
+     * The **Delete** action for Answers in the full application
+     * embedding mode.
      *
      * @example
      * ```js
@@ -2687,7 +3035,6 @@ var Action;
     Action["AnswerDelete"] = "onDeleteAnswer";
     /**
      * The Chart switcher icon on Answer and visualization pages.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AnswerChartSwitcher]
@@ -2697,7 +3044,6 @@ var Action;
     Action["AnswerChartSwitcher"] = "answerChartSwitcher";
     /**
      * Favorites icon (*) on Answers, Liveboard, and Data pages
-     *
      * @example
      * ```js
      * disabledActions: [Action.AddToFavorites]
@@ -2707,7 +3053,6 @@ var Action;
     Action["AddToFavorites"] = "addToFavorites";
     /**
      * The edit icon on Liveboards (Classic experience).
-     *
      * @example
      * ```js
      * disabledActions: [Action.EditDetails]
@@ -2717,15 +3062,17 @@ var Action;
     Action["EditDetails"] = "editDetails";
     /**
      * The Create alert action on KPI charts.
-     *
      * @example
      * ```js
-     * disabledActions: [Action.CreateMonitor ]
+     * disabledActions: [Action.CreateMonitor]
      * ```
      * @version SDK: 1.11.0 | ThoughtSpot: 8.3.0.cl, 8.4.1.sw
      */
     Action["CreateMonitor"] = "createMonitor";
     /**
+     * @deprecated
+     * Reports errors
+     *
      * @example
      * ```js
      * disabledActions: [Action.ReportError]
@@ -2736,7 +3083,6 @@ var Action;
     /**
      * The **Sync to sheets** action on Answers and Liveboard visualizations.
      * Allows sending data to a Google Sheet.
-     *
      * @example
      * ```js
      * disabledActions: [Action.SyncToSheets]
@@ -2748,7 +3094,6 @@ var Action;
      * The **Sync to other apps** action on Answers and Liveboard visualizations.
      * Allows sending data to third-party apps like Slack, Salesforce,
      * Microsoft Teams, and so on.
-     *
      * @example
      * ```js
      * disabledActions: [Action.SyncToOtherApps]
@@ -2759,7 +3104,6 @@ var Action;
     /**
      * The **Manage pipelines** action on Answers and Liveboard visualizations.
      * Allows users to manage data sync pipelines to third-party apps.
-     *
      * @example
      * ```js
      * disabledActions: [Action.SyncToOtherApps]
@@ -2770,7 +3114,6 @@ var Action;
     /**
      * The **Filter** action on Liveboard visualizations.
      * Allows users to apply cross-filters on a Liveboard.
-     *
      * @example
      * ```js
      * disabledActions: [Action.CrossFilter]
@@ -2779,10 +3122,29 @@ var Action;
      */
     Action["CrossFilter"] = "context-menu-item-cross-filter";
     /**
+     * The **Sync to Slack** action on Liveboard visualizations.
+     * Allows sending data to third-party apps Slack
+     * @example
+     * ```js
+     * disabledActions: [Action.SyncToSlack]
+     * ```
+     * @version @version SDK : 1.32.0 | Thoughtspot: 10.1.0.cl
+     */
+    Action["SyncToSlack"] = "syncToSlack";
+    /**
+     * The **Sync to Teams** action on Liveboard visualizations.
+     * Allows sending data to third-party apps Team
+     * @example
+     * ```js
+     * disabledActions: [Action.SyncToTeams]
+     * ```
+     * @version @version SDK : 1.32.0 | Thoughtspot: 10.1.0.cl
+     */
+    Action["SyncToTeams"] = "syncToTeams";
+    /**
      * The **Remove** action that appears when cross filters are applied
      * on a Liveboard.
      * Removes filters applied o a visualization.
-     *
      * @example
      * ```js
      * disabledActions: [Action.RemoveCrossFilter]
@@ -2794,7 +3156,6 @@ var Action;
      * The **Aggregate** option in the chart axis or the
      * table column customization menu.
      * Provides aggregation options to analyze the data on a chart or table.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuAggregate]
@@ -2806,7 +3167,6 @@ var Action;
      * The **Time bucket** option in the chart axis or table column
      * customization menu.
      * Allows defining time metric for date comparison.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuTimeBucket]
@@ -2817,7 +3177,6 @@ var Action;
     /**
      * The **Filter** action in the chart axis or table column
      * customization menu.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuFilter]
@@ -2829,7 +3188,6 @@ var Action;
      * The **Conditional formatting** action on chart or table.
      * Allows adding rules for conditional formatting of data
      * points on a chart or table.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuConditionalFormat]
@@ -2841,7 +3199,6 @@ var Action;
      * The **Sort** menu action on a table or chart axis
      * Sorts data in ascending or descending order.
      * Allows adding, editing, or removing filters.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuConditionalFormat]
@@ -2854,7 +3211,6 @@ var Action;
      * customization menu.
      * Allows grouping data points if the axes use the same
      * unit of measurement and a similar scale.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuGroup]
@@ -2866,7 +3222,6 @@ var Action;
      * The **Position** option in the axis customization menu.
      * Allows changing the position of the axis to the
      * left or right side of the chart.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuPosition]
@@ -2877,7 +3232,6 @@ var Action;
     /**
      * The **Rename** option in the chart axis or table column customization menu.
      * Renames the axis label on a chart or the column header on a table.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuRename]
@@ -2889,7 +3243,6 @@ var Action;
      * The **Edit** action in the axis customization menu.
      * Allows editing the axis name, position, minimum and maximum values,
      * and format of a column.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuEdit]
@@ -2900,7 +3253,6 @@ var Action;
     /**
      * The **Number format** action to customize the format of
      * the data labels on a chart or table.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuNumberFormat]
@@ -2911,7 +3263,6 @@ var Action;
     /**
      * The **Text wrapping** action on a table.
      * Wraps or clips column text on a table.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuTextWrapping]
@@ -2924,7 +3275,6 @@ var Action;
      * customization menu.
      * Removes the data labels from a chart or the column of a
      * table visualization.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AxisMenuRemove]
@@ -2939,7 +3289,6 @@ var Action;
     /**
      * The **Rename** menu action on Liveboards and visualizations.
      * Allows renaming a Liveboard or visualization.
-     *
      * @example
      * ```js
      * disabledActions: [Action.RenameModalTitleDescription]
@@ -2949,41 +3298,92 @@ var Action;
     Action["RenameModalTitleDescription"] = "renameModalTitleDescription";
     /**
      *
+     * The **Request Verification** action on the Liveboard.
+     * Triggers a Liveboard verification request.
+     *
+     * @example
+     * ```js
+     * disabledActions: [Action.RequestVerification]
+     * ```
+     *
      * @version SDK: 1.25.0 | Thoughtspot: 9.6.0.cl
      */
     Action["RequestVerification"] = "requestVerification";
     /**
+     *
+     * Allows users to mark a Liveboard as verified.
+     *
+     * @example
+     * ```js
+     * disabledActions: [Action.MarkAsVerified]
+     * ```
      * @version SDK: 1.25.0 | Thoughtspot: 9.6.0.cl
      */
     Action["MarkAsVerified"] = "markAsVerified";
     /**
+     * The **Add Tab** action on a Liveboard.
+     * Allows adding a new tab to a Liveboard view.
+     *
+     * @example
+     * ```js
+     * disabledActions: [Action.AddTab]
+     * ```
      * @version SDK: 1.26.0 | Thoughtspot: 9.7.0.cl
      */
     Action["AddTab"] = "addTab";
     /**
+     *
+     * Initiates contextual change analysis on KPI charts.
+     *
+     * @example
+     * ```js
+     * disabledActions: [Action.EnableContextualChangeAnalysis]
+     * ```
      * @version SDK: 1.25.0 | Thoughtspot: 9.6.0.cl
      */
     Action["EnableContextualChangeAnalysis"] = "enableContextualChangeAnalysis";
     /**
+     *
+     * @example
+     * ```js
+     * disabledActions: [Action.ShowSageQuery]
+     * ```
+     *
      * @version SDK: 1.26.0 | Thoughtspot: 9.7.0.cl
      */
     Action["ShowSageQuery"] = "showSageQuery";
     /**
+     *
+     * @example
+     * ```js
+     * disabledActions: [Action.EditSageAnswer]
+     * ```
      * @version SDK: 1.26.0 | Thoughtspot: 9.7.0.cl
      */
     Action["EditSageAnswer"] = "editSageAnswer";
     /**
+     *
+     * This action allows users to send feedback on AI-generated Answers.
+     *
+     * @example
+     * ```js
+     * disabledActions: [Action.SageAnswerFeedback]
+     * ```
      * @version SDK: 1.26.0 | Thoughtspot: 9.7.0.cl
      */
     Action["SageAnswerFeedback"] = "sageAnswerFeedback";
     /**
+     *
+     * @example
+     * ```js
+     * disabledActions: [Action.ModifySageAnswer]
+     * ```
      * @version SDK: 1.26.0 | Thoughtspot: 9.7.0.cl
      */
     Action["ModifySageAnswer"] = "modifySageAnswer";
     /**
      * The **Move to Tab** menu action on visualizations in liveboard edit mode.
      * Allows moving a visualization to a different tab.
-     *
      * @example
      * ```js
      * disabledActions: [Action.MoveToTab]
@@ -2992,16 +3392,14 @@ var Action;
     Action["MoveToTab"] = "onContainerMove";
     /**
      * The **Manage Alertsb** menu action on KPI visualizations.
-     *
      * @example
      * ```js
      * disabledActions: [Action.ManageMonitor]
      * ```
      */
-    Action["ManageMonitor"] = "ManageMonitor";
+    Action["ManageMonitor"] = "manageMonitor";
     /**
      * Action ID for Liveboard Personalised Views dropdown
-     *
      *  @example
      * ```js
      * disabledActions: [Action.PersonalisedViewsDropdown]
@@ -3011,7 +3409,6 @@ var Action;
     Action["PersonalisedViewsDropdown"] = "personalisedViewsDropdown";
     /**
      * Action ID for Liveboard Users ( Recently Visited / social proof )
-     *
      *  @example
      * ```js
      * disabledActions: [Action.LiveboardUsers]
@@ -3020,8 +3417,36 @@ var Action;
      */
     Action["LiveboardUsers"] = "liveboardUsers";
     /**
-     * Action ID for to hide Verified Liveboard Banner
+     * Action ID for the Parent TML action
+     * The parent action **TML** must be included to access TML-related options
+     * within the cascading menu (specific to the answer page)
+     * @example
+     * ```js
+     * // to include specific TML actions
+     * visibleActions: [Action.TML, Action.ExportTML, Action.EditTML]
      *
+     * ```
+     * @example
+     * ```js
+     * hiddenAction: [Action.TML] // hide all TML actions
+     * disabledActions: [Action.TML] // to disable all TML actions
+     * ```
+     * @version SDK : 1.28.3 | Thoughtspot: 9.12.0.cl
+     */
+    Action["TML"] = "tml";
+    /**
+     * Action Id for CreateLiveboard for liveboard list page & Pin Modal
+     * @example
+     * ```js
+     * hiddenAction: [Action.CreateLiveboard]
+     * disabledActions: [Action.CreateLiveboard]
+     * ```
+     *
+     * @version SDK: 1.32.0 | Thoughtspot: 10.1.0.cl
+     */
+    Action["CreateLiveboard"] = "CreateLiveboard";
+    /**
+     * Action ID for to hide Verified Liveboard Banner
      *  @example
      * ```js
      * hiddenAction: [Action.VerifiedLiveboard]
@@ -3031,7 +3456,6 @@ var Action;
     Action["VerifiedLiveboard"] = "verifiedLiveboard";
     /**
      * Action ID for ask sage button
-     *
      *  @example
      * ```js
      * hiddenAction: [Action.AskAi]
@@ -3041,7 +3465,6 @@ var Action;
     Action["AskAi"] = "AskAi";
     /**
      * The **Add KPI to Watchlist** action on Home page watchlist.
-     *
      * @example
      * ```js
      * disabledActions: [Action.AddToWatchlist]
@@ -3051,7 +3474,6 @@ var Action;
     Action["AddToWatchlist"] = "addToWatchlist";
     /**
      * The **Remove from watchlist** menu action on KPI watchlist.
-     *
      * @example
      * ```js
      * disabledActions: [Action.RemoveFromWatchlist]
@@ -3060,18 +3482,16 @@ var Action;
      */
     Action["RemoveFromWatchlist"] = "removeFromWatchlist";
     /**
-     * The **Copy KPI Link** menu action on KPI watchlist.
-     *
+     * The **Organise Favourites** action on Homepage Favourite Module.
      * @example
      * ```js
-     * disabledActions: [Action.CopyKpiLink]
+     * disabledActions: [Action.OrganiseFavourites]
      * ```
-     * @version SDK : 1.27.9 | Thoughtspot: 9.12.5.cl
+     * @version SDK : 1.32.0 | Thoughtspot: 10.0.0.cl
      */
-    Action["CopyKpiLink"] = "copyKpiLink";
+    Action["OrganiseFavourites"] = "organiseFavourites";
     /**
      * Action ID for AI Highlights button
-     *
      *  @example
      * ```js
      * hiddenAction: [Action.AIHighlights]
@@ -3079,6 +3499,60 @@ var Action;
      *  @version SDK: 1.27.10 | Thoughtspot: 9.12.5.cl
      */
     Action["AIHighlights"] = "AIHighlights";
+    /**
+     * Action ID for edit schedule action on schedule on homepage
+     * @example
+     * ```js
+     * disabledActions: [Action.EditScheduleHomepage]
+     * ```
+     *  @version SDK: 1.34.0 | Thoughtspot: 10.3.0.cl
+     */
+    Action["EditScheduleHomepage"] = "editScheduleHomepage";
+    /**
+     * Action ID for pause schedule action on schedule on homepage
+     * @example
+     * ```js
+     * disabledActions: [Action.PauseScheduleHomepage]
+     * ```
+     *  @version SDK: 1.34.0 | Thoughtspot: 10.3.0.cl
+     */
+    Action["PauseScheduleHomepage"] = "pauseScheduleHomepage";
+    /**
+     * Action ID for view schedule run action on schedule on homepage
+     * @example
+     * ```js
+     * disabledActions: [Action.ViewScheduleRunHomepage]
+     * ```
+     *  @version SDK: 1.34.0 | Thoughtspot: 10.3.0.cl
+     */
+    Action["ViewScheduleRunHomepage"] = "viewScheduleRunHomepage";
+    /**
+     * Action ID for unsubscribe schedule action on schedule on homepage
+     * @example
+     * ```js
+     * disabledActions: [Action.UnsubscribeScheduleHomepage]
+     * ```
+     *  @version SDK: 1.34.0 | Thoughtspot: 10.3.0.cl
+     */
+    Action["UnsubscribeScheduleHomepage"] = "unsubscribeScheduleHomepage";
+    /**
+     * Action ID for delete schedule action on schedule on homepage
+     * @example
+     * ```js
+     * disabledActions: [Action.DeleteScheduleHomepage]
+     * ```
+     *  @version SDK: 1.34.0 | Thoughtspot: 10.3.0.cl
+     */
+    Action["DeleteScheduleHomepage"] = "deleteScheduleHomepage";
+    /**
+     * The **Analyze CTA** action on KPI chart.
+     * @example
+     * ```js
+     * disabledActions: [Action.KPIAnalysisCTA]
+     * ```
+     *  @version SDK: 1.34.0 | Thoughtspot: 10.3.0.cl
+     */
+    Action["KPIAnalysisCTA"] = "kpiAnalysisCTA";
 })(Action || (Action = {}));
 var PrefetchFeatures;
 (function (PrefetchFeatures) {
@@ -3099,7 +3573,6 @@ var LogLevel;
 (function (LogLevel) {
     /**
      * No logs will be logged in the console.
-     *
      * @example
      * ```js
      * init({
@@ -3112,7 +3585,6 @@ var LogLevel;
     LogLevel["SILENT"] = "SILENT";
     /**
      * Only ERROR logs will be logged in the console.
-     *
      * @example
      * ```js
      * init({
@@ -3125,7 +3597,6 @@ var LogLevel;
     LogLevel["ERROR"] = "ERROR";
     /**
      * Only WARN and ERROR logs will be logged in the console.
-     *
      * @example
      * ```js
      * init({
@@ -3138,7 +3609,6 @@ var LogLevel;
     LogLevel["WARN"] = "WARN";
     /**
      * Only INFO, WARN, and ERROR logs will be logged in the console.
-     *
      * @example
      * ```js
      * init({
@@ -3151,7 +3621,6 @@ var LogLevel;
     LogLevel["INFO"] = "INFO";
     /**
      * Only DEBUG, INFO, WARN, and ERROR logs will be logged in the console.
-     *
      * @example
      * ```js
      * init({
@@ -3164,7 +3633,6 @@ var LogLevel;
     LogLevel["DEBUG"] = "DEBUG";
     /**
      * All logs will be logged in the console.
-     *
      * @example
      * ```js
      * init({
@@ -3177,356 +3645,8 @@ var LogLevel;
     LogLevel["TRACE"] = "TRACE";
 })(LogLevel || (LogLevel = {}));
 
-// istanbul ignore next
-const isObject = (obj) => {
-    if (typeof obj === "object" && obj !== null) {
-        if (typeof Object.getPrototypeOf === "function") {
-            const prototype = Object.getPrototypeOf(obj);
-            return prototype === Object.prototype || prototype === null;
-        }
-        return Object.prototype.toString.call(obj) === "[object Object]";
-    }
-    return false;
-};
-const merge = (...objects) => objects.reduce((result, current) => {
-    if (Array.isArray(current)) {
-        throw new TypeError("Arguments provided to ts-deepmerge must be objects, not arrays.");
-    }
-    Object.keys(current).forEach((key) => {
-        if (["__proto__", "constructor", "prototype"].includes(key)) {
-            return;
-        }
-        if (Array.isArray(result[key]) && Array.isArray(current[key])) {
-            result[key] = merge.options.mergeArrays
-                ? Array.from(new Set(result[key].concat(current[key])))
-                : current[key];
-        }
-        else if (isObject(result[key]) && isObject(current[key])) {
-            result[key] = merge(result[key], current[key]);
-        }
-        else {
-            result[key] = current[key];
-        }
-    });
-    return result;
-}, {});
-const defaultOptions = {
-    mergeArrays: true,
-};
-merge.options = defaultOptions;
-merge.withOptions = (options, ...objects) => {
-    merge.options = Object.assign({ mergeArrays: true }, options);
-    const result = merge(...objects);
-    merge.options = defaultOptions;
-    return result;
-};
-
-/**
- * Copyright (c) 2023
- *
- * Common utility functions for ThoughtSpot Visual Embed SDK
- *
- * @summary Utils
- * @author Ayon Ghosh <ayon.ghosh@thoughtspot.com>
- */
-/**
- * Construct a runtime filters query string from the given filters.
- * Refer to the following docs for more details on runtime filter syntax:
- * https://cloud-docs.thoughtspot.com/admin/ts-cloud/apply-runtime-filter.html
- * https://cloud-docs.thoughtspot.com/admin/ts-cloud/runtime-filter-operators.html
- *
- * @param runtimeFilters
- */
-const getFilterQuery = (runtimeFilters) => {
-    if (runtimeFilters && runtimeFilters.length) {
-        const filters = runtimeFilters.map((filter, valueIndex) => {
-            const index = valueIndex + 1;
-            const filterExpr = [];
-            filterExpr.push(`col${index}=${encodeURIComponent(filter.columnName)}`);
-            filterExpr.push(`op${index}=${filter.operator}`);
-            filterExpr.push(filter.values.map((value) => `val${index}=${encodeURIComponent(value)}`).join('&'));
-            return filterExpr.join('&');
-        });
-        return `${filters.join('&')}`;
-    }
-    return null;
-};
-/**
- * Construct a runtime parameter override query string from the given option.
- *
- * @param runtimeParameters
- */
-const getRuntimeParameters = (runtimeParameters) => {
-    if (runtimeParameters && runtimeParameters.length) {
-        const params = runtimeParameters.map((param, valueIndex) => {
-            const index = valueIndex + 1;
-            const filterExpr = [];
-            filterExpr.push(`param${index}=${encodeURIComponent(param.name)}`);
-            filterExpr.push(`paramVal${index}=${encodeURIComponent(param.value)}`);
-            return filterExpr.join('&');
-        });
-        return `${params.join('&')}`;
-    }
-    return null;
-};
-/**
- * Convert a value to a string representation to be sent as a query
- * parameter to the ThoughtSpot app.
- *
- * @param value Any parameter value
- */
-const serializeParam = (value) => {
-    // do not serialize primitive types
-    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-        return value;
-    }
-    return JSON.stringify(value);
-};
-/**
- * Convert a value to a string:
- * in case of an array, we convert it to CSV.
- * in case of any other type, we directly return the value.
- *
- * @param value
- */
-const paramToString = (value) => (Array.isArray(value) ? value.join(',') : value);
-/**
- * Return a query param string composed from the given params object
- *
- * @param queryParams
- * @param shouldSerializeParamValues
- */
-const getQueryParamString = (queryParams, shouldSerializeParamValues = false) => {
-    const qp = [];
-    const params = Object.keys(queryParams);
-    params.forEach((key) => {
-        const val = queryParams[key];
-        if (val !== undefined) {
-            const serializedValue = shouldSerializeParamValues
-                ? serializeParam(val)
-                : paramToString(val);
-            qp.push(`${key}=${serializedValue}`);
-        }
-    });
-    if (qp.length) {
-        return qp.join('&');
-    }
-    return null;
-};
-/**
- * Get a string representation of a dimension value in CSS
- * If numeric, it is considered in pixels.
- *
- * @param value
- */
-const getCssDimension = (value) => {
-    if (typeof value === 'number') {
-        return `${value}px`;
-    }
-    return value;
-};
-/**
- * Append a string to a URL's hash fragment
- *
- * @param url A URL
- * @param stringToAppend The string to append to the URL hash
- */
-const appendToUrlHash = (url, stringToAppend) => {
-    let outputUrl = url;
-    const encStringToAppend = encodeURIComponent(stringToAppend);
-    if (url.indexOf('#') >= 0) {
-        outputUrl = `${outputUrl}${encStringToAppend}`;
-    }
-    else {
-        outputUrl = `${outputUrl}#${encStringToAppend}`;
-    }
-    return outputUrl;
-};
-/**
- *
- * @param url
- * @param stringToAppend
- * @param path
- */
-function getRedirectUrl(url, stringToAppend, path = '') {
-    const targetUrl = path ? new URL(path, window.location.origin).href : url;
-    return appendToUrlHash(targetUrl, stringToAppend);
-}
-const getEncodedQueryParamsString = (queryString) => {
-    if (!queryString) {
-        return queryString;
-    }
-    return btoa(queryString).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-};
-const getOffsetTop = (element) => {
-    const rect = element.getBoundingClientRect();
-    return rect.top + window.scrollY;
-};
-const embedEventStatus = {
-    START: 'start',
-    END: 'end',
-};
-const setAttributes = (element, attributes) => {
-    Object.keys(attributes).forEach((key) => {
-        element.setAttribute(key, attributes[key].toString());
-    });
-};
-const isCloudRelease = (version) => version.endsWith('.cl');
-/* For Search Embed: ReleaseVersionInBeta */
-const checkReleaseVersionInBeta = (releaseVersion, suppressBetaWarning) => {
-    if (releaseVersion !== '' && !isCloudRelease(releaseVersion)) {
-        const splittedReleaseVersion = releaseVersion.split('.');
-        const majorVersion = Number(splittedReleaseVersion[0]);
-        const isBetaVersion = majorVersion < 8;
-        return !suppressBetaWarning && isBetaVersion;
-    }
-    return false;
-};
-const getCustomisations = (embedConfig, viewConfig) => {
-    var _a, _b, _c, _d;
-    const customCssUrlFromEmbedConfig = embedConfig.customCssUrl;
-    const customizationsFromViewConfig = viewConfig.customizations;
-    const customizationsFromEmbedConfig = embedConfig.customizations
-        || embedConfig.customisations;
-    const customizations = {
-        style: {
-            ...customizationsFromEmbedConfig === null || customizationsFromEmbedConfig === void 0 ? void 0 : customizationsFromEmbedConfig.style,
-            ...customizationsFromViewConfig === null || customizationsFromViewConfig === void 0 ? void 0 : customizationsFromViewConfig.style,
-            customCSS: {
-                ...(_a = customizationsFromEmbedConfig === null || customizationsFromEmbedConfig === void 0 ? void 0 : customizationsFromEmbedConfig.style) === null || _a === void 0 ? void 0 : _a.customCSS,
-                ...(_b = customizationsFromViewConfig === null || customizationsFromViewConfig === void 0 ? void 0 : customizationsFromViewConfig.style) === null || _b === void 0 ? void 0 : _b.customCSS,
-            },
-            customCSSUrl: ((_c = customizationsFromViewConfig === null || customizationsFromViewConfig === void 0 ? void 0 : customizationsFromViewConfig.style) === null || _c === void 0 ? void 0 : _c.customCSSUrl)
-                || ((_d = customizationsFromEmbedConfig === null || customizationsFromEmbedConfig === void 0 ? void 0 : customizationsFromEmbedConfig.style) === null || _d === void 0 ? void 0 : _d.customCSSUrl)
-                || customCssUrlFromEmbedConfig,
-        },
-        content: {
-            ...customizationsFromEmbedConfig === null || customizationsFromEmbedConfig === void 0 ? void 0 : customizationsFromEmbedConfig.content,
-            ...customizationsFromViewConfig === null || customizationsFromViewConfig === void 0 ? void 0 : customizationsFromViewConfig.content,
-        },
-    };
-    return customizations;
-};
-const getRuntimeFilters = (runtimefilters) => getFilterQuery(runtimefilters || []);
-/**
- * Gets a reference to the DOM node given
- * a selector.
- *
- * @param domSelector
- */
-function getDOMNode(domSelector) {
-    return typeof domSelector === 'string' ? document.querySelector(domSelector) : domSelector;
-}
-const deepMerge = (target, source) => merge(target, source);
-const getOperationNameFromQuery = (query) => {
-    const regex = /(?:query|mutation)\s+(\w+)/;
-    const matches = query.match(regex);
-    return matches === null || matches === void 0 ? void 0 : matches[1];
-};
-/**
- *
- * @param obj
- */
-function removeTypename(obj) {
-    if (!obj || typeof obj !== 'object')
-        return obj;
-    // eslint-disable-next-line no-restricted-syntax
-    for (const key in obj) {
-        if (key === '__typename') {
-            delete obj[key];
-        }
-        else if (typeof obj[key] === 'object') {
-            removeTypename(obj[key]);
-        }
-    }
-    return obj;
-}
-/**
- * Sets the specified style properties on an HTML element.
- *
- * @param {HTMLElement} element - The HTML element to which the styles should be applied.
- * @param {Partial<CSSStyleDeclaration>} styleProperties - An object containing style
- * property names and their values.
- * @example
- * // Apply styles to an element
- * const element = document.getElementById('myElement');
- * const styles = {
- *   backgroundColor: 'red',
- *   fontSize: '16px',
- * };
- * setStyleProperties(element, styles);
- */
-const setStyleProperties = (element, styleProperties) => {
-    if (!(element === null || element === void 0 ? void 0 : element.style))
-        return;
-    Object.keys(styleProperties).forEach((styleProperty) => {
-        element.style[styleProperty] = styleProperties[styleProperty].toString();
-    });
-};
-/**
- * Removes specified style properties from an HTML element.
- *
- * @param {HTMLElement} element - The HTML element from which the styles should be removed.
- * @param {string[]} styleProperties - An array of style property names to be removed.
- * @example
- * // Remove styles from an element
- * const element = document.getElementById('myElement');
- * element.style.backgroundColor = 'red';
- * const propertiesToRemove = ['backgroundColor'];
- * removeStyleProperties(element, propertiesToRemove);
- */
-const removeStyleProperties = (element, styleProperties) => {
-    if (!(element === null || element === void 0 ? void 0 : element.style))
-        return;
-    styleProperties.forEach((styleProperty) => {
-        element.style.removeProperty(styleProperty);
-    });
-};
-const isUndefined = (value) => value === undefined;
-
-/**
- * Checks if `value` is `undefined`.
- *
- * @static
- * @since 0.1.0
- * @memberOf _
- * @category Lang
- * @param {*} value The value to check.
- * @returns {boolean} Returns `true` if `value` is `undefined`, else `false`.
- * @example
- *
- * _.isUndefined(void 0);
- * // => true
- *
- * _.isUndefined(null);
- * // => false
- */
-function isUndefined$1(value) {
-  return value === undefined;
-}
-
-var isUndefined_1 = isUndefined$1;
-
-/**
- * This method returns `undefined`.
- *
- * @static
- * @memberOf _
- * @since 2.3.0
- * @category Util
- * @example
- *
- * _.times(2, _.noop);
- * // => [undefined, undefined]
- */
-function noop() {
-  // No operation performed.
-}
-
-var noop_1 = noop;
-
 const logFunctions = {
-    [LogLevel.SILENT]: noop_1,
+    [LogLevel.SILENT]: () => undefined,
     [LogLevel.ERROR]: console.error,
     [LogLevel.WARN]: console.warn,
     [LogLevel.INFO]: console.info,
@@ -3561,7 +3681,7 @@ class Logger {
     canLog(logLevel) {
         if (logLevel === LogLevel.SILENT)
             return false;
-        if (!isUndefined_1(globalLogLevelOverride)) {
+        if (!isUndefined(globalLogLevelOverride)) {
             return compareLogLevels(globalLogLevelOverride, logLevel) >= 0;
         }
         return compareLogLevels(this.logLevel, logLevel) >= 0;
@@ -5800,10 +5920,28 @@ function isEqual(value, other) {
 
 var isEqual_1 = isEqual;
 
-var name="@thoughtspot/visual-embed-sdk";var version="1.28.1";var description="ThoughtSpot Embed SDK";var module="lib/src/index.js";var main="dist/tsembed.js";var types="lib/src/index.d.ts";var files=["dist/**","lib/**","src/**","cjs/**"];var exports={".":{"import":"./lib/src/index.js",require:"./cjs/src/index.js",types:"./lib/src/index.d.ts"},"./react":{"import":"./lib/src/react/all-types-export.js",require:"./cjs/src/react/all-types-export.js",types:"./lib/src/react/all-types-export.d.ts"},"./lib/src/react":{"import":"./lib/src/react/all-types-export.js",require:"./cjs/src/react/all-types-export.js",types:"./lib/src/react/all-types-export.d.ts"}};var typesVersions={"*":{react:["./lib/src/react/all-types-export.d.ts"]}};var scripts={lint:"eslint 'src/**'","lint:fix":"eslint 'src/**/*.*' --fix",tsc:"tsc -p . --incremental false; tsc -p . --incremental false --module commonjs --outDir cjs",start:"gatsby develop","build:gatsby":"npm run clean:gatsby && gatsby build --prefix-paths","build:gatsby:noprefix":"npm run clean:gatsby && gatsby build","serve:gatsby":"gatsby serve","clean:gatsby":"gatsby clean","build-and-publish":"npm run build:gatsby && npm run publish","bundle-dts-file":"dts-bundle --name @thoughtspot/visual-embed-sdk --out visual-embed-sdk.d.ts --main lib/src/index.d.ts","bundle-dts":"dts-bundle --name ../../dist/visual-embed-sdk --main lib/src/index.d.ts --outputAsModuleFolder=true","bundle-dts-react":"dts-bundle --name ../../../dist/visual-embed-sdk-react --main lib/src/react/index.d.ts --outputAsModuleFolder=true","bundle-dts-react-full":"dts-bundle --name ../../../dist/visual-embed-sdk-react-full --main lib/src/react/all-types-export.d.ts --outputAsModuleFolder=true",build:"rollup -c",watch:"rollup -cw","docs-cmd":"node scripts/gatsby-commands.js",docgen:"typedoc --tsconfig tsconfig.json --theme typedoc-theme","test-sdk":"jest -c jest.config.sdk.js --runInBand","test-docs":"jest -c jest.config.docs.js",test:"npm run test-sdk && npm run test-docs",posttest:"cat ./coverage/sdk/lcov.info | coveralls","is-publish-allowed":"node scripts/is-publish-allowed.js",prepublishOnly:"npm run is-publish-allowed && npm run test && npm run tsc && npm run bundle-dts-file && npm run bundle-dts && npm run bundle-dts-react && npm run bundle-dts-react-full && npm run build","check-size":"npm run build && size-limit","publish-dev":"npm publish --tag dev","publish-prod":"npm publish --tag latest"};var peerDependencies={react:"> 16.8.0","react-dom":"> 16.8.0"};var dependencies={algoliasearch:"^4.10.5",classnames:"^2.3.1",dompurify:"^2.3.4","eslint-plugin-comment-length":"^0.9.2","eslint-plugin-jsdoc":"^46.9.0",eventemitter3:"^4.0.7","gatsby-plugin-vercel":"^1.0.3","html-react-parser":"^1.4.12",lodash:"^4.17.21","mixpanel-browser":"^2.45.0","ts-deepmerge":"^6.0.2",tslib:"^2.5.3","use-deep-compare-effect":"^1.8.1"};var devDependencies={"@mdx-js/mdx":"^1.6.22","@mdx-js/react":"^1.6.22","@react-icons/all-files":"^4.1.0","@rollup/plugin-commonjs":"^18.0.0","@rollup/plugin-json":"^4.1.0","@rollup/plugin-node-resolve":"^11.2.1","@rollup/plugin-replace":"^5.0.2","@size-limit/preset-big-lib":"^8.2.6","@testing-library/dom":"^7.31.0","@testing-library/jest-dom":"^5.14.1","@testing-library/react":"^11.2.7","@testing-library/user-event":"^13.1.8","@types/jest":"^22.2.3","@types/mixpanel-browser":"^2.35.6","@types/react-test-renderer":"^17.0.1","@typescript-eslint/eslint-plugin":"^4.6.0","@typescript-eslint/parser":"^4.6.0",asciidoctor:"^2.2.1","babel-jest":"^26.6.3","babel-preset-gatsby":"^1.10.0","command-line-args":"^5.1.1",coveralls:"^3.1.0","current-git-branch":"^1.1.0","dts-bundle":"^0.7.3",eslint:"^7.12.1","eslint-config-airbnb-base":"^14.2.0","eslint-config-prettier":"^6.15.0","eslint-import-resolver-typescript":"^2.3.0","eslint-plugin-import":"^2.22.1","eslint-plugin-prettier":"^3.1.4","eslint-plugin-react-hooks":"^4.2.0","fs-extra":"^10.0.0",gatsby:"3.13.1","gatsby-plugin-algolia":"^0.22.2","gatsby-plugin-catch-links":"^3.1.0","gatsby-plugin-env-variables":"^2.1.0","gatsby-plugin-intl":"^0.3.3","gatsby-plugin-manifest":"^3.2.0","gatsby-plugin-output":"^0.1.3","gatsby-plugin-sass":"6.7.0","gatsby-plugin-sitemap":"^4.10.0","gatsby-source-filesystem":"3.1.0","gatsby-transformer-asciidoc":"2.1.0","gatsby-transformer-rehype":"2.0.0","gh-pages":"^3.1.0","highlight.js":"^10.6.0","html-to-text":"^8.0.0","identity-obj-proxy":"^3.0.0","istanbul-merge":"^1.1.1",jest:"^26.6.3","jest-fetch-mock":"^3.0.3",jsdom:"^17.0.0","node-sass":"^8.0.0",prettier:"2.1.2",react:"^16.14.0","react-dom":"^16.14.0","react-resizable":"^1.11.0","react-resize-detector":"^6.6.0","react-test-renderer":"^17.0.2","react-use-flexsearch":"^0.1.1",rollup:"2.30.0","rollup-plugin-typescript2":"0.27.3","ts-jest":"^26.5.5","ts-loader":"8.0.4",typedoc:"0.21.6","typedoc-plugin-toc-group":"thoughtspot/typedoc-plugin-toc-group",typescript:"^4.9.4","url-search-params-polyfill":"^8.1.0",util:"^0.12.4"};var author="ThoughtSpot";var email="support@thoughtspot.com";var license="ThoughtSpot Development Tools End User License Agreement";var directories={lib:"lib"};var repository={type:"git",url:"git+https://github.com/thoughtspot/visual-embed-sdk.git"};var publishConfig={registry:"https://registry.npmjs.org"};var keywords=["thoughtspot","everywhere","embed","sdk","analytics"];var bugs={url:"https://github.com/thoughtspot/visual-embed-sdk/issues"};var homepage="https://github.com/thoughtspot/visual-embed-sdk#readme";var globals={window:{}};var pkgInfo = {name:name,version:version,description:description,module:module,main:main,types:types,files:files,exports:exports,typesVersions:typesVersions,"size-limit":[{path:"dist/tsembed.js",limit:"45 kB"}],scripts:scripts,peerDependencies:peerDependencies,dependencies:dependencies,devDependencies:devDependencies,author:author,email:email,license:license,directories:directories,repository:repository,publishConfig:publishConfig,keywords:keywords,bugs:bugs,homepage:homepage,globals:globals};
+const ERROR_MESSAGE = {
+    INVALID_THOUGHTSPOT_HOST: 'Error parsing ThoughtSpot host. Please provide a valid URL.',
+    LIVEBOARD_VIZ_ID_VALIDATION: 'Please select a liveboard to embed.',
+    TRIGGER_TIMED_OUT: 'Trigger timedout in getting response',
+    SEARCHEMBED_BETA_WRANING_MESSAGE: 'Search Embed is in Beta in this release.',
+    SAGE_EMBED_BETA_WARNING_MESSAGE: 'Sage Embed is in Beta in this release.',
+    THIRD_PARTY_COOKIE_BLOCKED_ALERT: 'Third party cookie access is blocked on this browser, please allow third party cookies for this to work properly. \nYou can use `suppressNoCookieAccessAlert` to suppress this message.',
+    DUPLICATE_TOKEN_ERR: 'Duplicate token, please issue a new token every time getAuthToken callback is called. See https://developers.thoughtspot.com/docs/?pageid=embed-auth#trusted-auth-embed for more details.',
+    SDK_NOT_INITIALIZED: 'SDK not initialized',
+    SESSION_INFO_FAILED: 'Failed to get session info',
+    INVALID_TOKEN_ERROR: 'Received invalid token from getAuthToken callback or authToken endpoint.',
+    MIXPANEL_TOKEN_NOT_FOUND: 'Mixpanel token not found in session info',
+    PRERENDER_ID_MISSING: 'PreRender id is required for preRender',
+    SYNC_STYLE_CALLED_BEFORE_RENDER: 'PreRender should be called before using syncPreRenderStyle',
+    CSP_VIOLATION_ALERT: 'CSP violation detected. Please check the console errors for more details.',
+    CSP_FRAME_HOST_VIOLATION_LOG_MESSAGE: 'Please setup CSP Correctly for the Application to start working. You can know more about setting CSP Correctly here: https://developers.thoughtspot.com/docs/security-settings#csp-viz-embed-hosts. \n In case you are still facing error, please read: https://developers.thoughtspot.com/docs/security-settings#csp-viz-embed-hosts',
+    MISSING_REPORTING_OBSERVER: 'ReportingObserver not supported',
+};
 
 const EndPoints = {
     AUTH_VERIFICATION: '/callosum/v1/session/info',
+    SESSION_INFO: '/callosum/v1/session/info',
     SAML_LOGIN_TEMPLATE: (targetUrl) => `/callosum/v1/saml/login?targetURLPath=${targetUrl}`,
     OIDC_LOGIN_TEMPLATE: (targetUrl) => `/callosum/v1/oidc/login?targetURLPath=${targetUrl}`,
     TOKEN_LOGIN: '/callosum/v1/session/login/token',
@@ -5829,7 +5967,6 @@ function failureLoggedFetch(url, options = {}) {
 }
 /**
  * Service to validate a auth token against a ThoughtSpot host.
- *
  * @param thoughtSpotHost : ThoughtSpot host to verify the token against.
  * @param authToken : Auth token to verify.
  */
@@ -5915,13 +6052,12 @@ async function fetchBasicAuthService(thoughtSpotHost, username, password) {
     });
 }
 
-const DUPLICATE_TOKEN_ERR = 'Duplicate token, please issue a new token every time getAuthToken callback is called.'
-    + 'See https://developers.thoughtspot.com/docs/?pageid=embed-auth#trusted-auth-embed for more details.';
-const INVALID_TOKEN_ERR = 'Invalid token received form token callback or authToken endpoint.';
 let cachedAuthToken = null;
 // This method can be used to get the authToken using the embedConfig
-const getAuthenticationToken = async (embedConfig) => {
-    if (cachedAuthToken) {
+async function getAuthenticationToken(embedConfig) {
+    // Since we don't have token validation enabled , we cannot tell if the
+    // cached token is valid or not. So we will always fetch a new token.
+    if (cachedAuthToken && !embedConfig.disableTokenVerification) {
         let isCachedTokenStillValid;
         try {
             isCachedTokenStillValid = await validateAuthToken(embedConfig, cachedAuthToken, true);
@@ -5941,12 +6077,22 @@ const getAuthenticationToken = async (embedConfig) => {
         const response = await fetchAuthTokenService(authEndpoint);
         authToken = await response.text();
     }
-    // this will throw error if the token is not valid
-    await validateAuthToken(embedConfig, authToken);
+    try {
+        // this will throw error if the token is not valid
+        await validateAuthToken(embedConfig, authToken);
+    }
+    catch (e) {
+        logger.error(`${ERROR_MESSAGE.INVALID_TOKEN_ERROR} Error : ${e.message}`);
+        throw e;
+    }
     cachedAuthToken = authToken;
     return authToken;
-};
+}
 const validateAuthToken = async (embedConfig, authToken, suppressAlert) => {
+    if (embedConfig.disableTokenVerification) {
+        logger.info('Token verification is disabled. Assuming token is valid.');
+        return true;
+    }
     try {
         const isTokenValid = await verifyTokenService(embedConfig.thoughtSpotHost, authToken);
         if (isTokenValid)
@@ -5958,17 +6104,698 @@ const validateAuthToken = async (embedConfig, authToken, suppressAlert) => {
     if (cachedAuthToken && cachedAuthToken === authToken) {
         if (!embedConfig.suppressErrorAlerts && !suppressAlert) {
             // eslint-disable-next-line no-alert
-            alert(DUPLICATE_TOKEN_ERR);
+            alert(ERROR_MESSAGE.DUPLICATE_TOKEN_ERR);
         }
-        throw new Error(DUPLICATE_TOKEN_ERR);
+        throw new Error(ERROR_MESSAGE.DUPLICATE_TOKEN_ERR);
     }
     else {
-        throw new Error(INVALID_TOKEN_ERR);
+        throw new Error(ERROR_MESSAGE.INVALID_TOKEN_ERROR);
     }
 };
+/**
+ * Resets the auth token and a new token will be fetched on the next request.
+ * @example
+ * ```js
+ * resetCachedAuthToken();
+ * ```
+ * @version SDK: 1.28.0 | ThoughtSpot: *
+ * @group Authentication / Init
+ */
 const resetCachedAuthToken = () => {
     cachedAuthToken = null;
 };
+
+let config = {};
+/**
+ * Gets the configuration embed was initialized with.
+ * @returns {@link EmbedConfig} The configuration embed was initialized with.
+ * @version SDK: 1.19.0 | ThoughtSpot: *
+ * @group Global methods
+ */
+const getEmbedConfig = () => config;
+/**
+ * Sets the configuration embed was initialized with.
+ * And returns the new configuration.
+ * @param newConfig The configuration to set.
+ * @version SDK: 1.27.0 | ThoughtSpot: *
+ * @group Global methods
+ */
+const setEmbedConfig = (newConfig) => {
+    config = newConfig;
+    return newConfig;
+};
+
+/**
+ * Fetch wrapper that adds the authentication token to the request.
+ * Use this to call the ThoughtSpot APIs when using the visual embed sdk.
+ * The interface for this method is the same as Web `Fetch`.
+ *
+ * @param input
+ * @param init
+ * @example
+ * ```js
+ * tokenizedFetch("<TS_ORIGIN>/api/rest/2.0/auth/session/user", {
+ *   // .. fetch options ..
+ * });
+ *```
+ * @version SDK: 1.28.0
+ * @group Global methods
+ */
+const tokenizedFetch = async (input, init) => {
+    const embedConfig = getEmbedConfig();
+    if (embedConfig.authType !== AuthType.TrustedAuthTokenCookieless) {
+        return fetch(input, init);
+    }
+    const req = new Request(input, init);
+    const authToken = await getAuthenticationToken(embedConfig);
+    if (authToken) {
+        req.headers.append('Authorization', `Bearer ${authToken}`);
+    }
+    return fetch(req);
+};
+
+/**
+ *
+ * @param root0
+ * @param root0.query
+ * @param root0.variables
+ * @param root0.thoughtSpotHost
+ * @param root0.isCompositeQuery
+ */
+async function graphqlQuery({ query, variables, thoughtSpotHost, isCompositeQuery = false, }) {
+    const operationName = getOperationNameFromQuery(query);
+    try {
+        const response = await tokenizedFetch(`${thoughtSpotHost}/prism/?op=${operationName}`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json;charset=UTF-8',
+                'x-requested-by': 'ThoughtSpot',
+                accept: '*/*',
+                'accept-language': 'en-us',
+            },
+            body: JSON.stringify({
+                operationName,
+                query,
+                variables,
+            }),
+            credentials: 'include',
+        });
+        const result = await response.json();
+        const dataValues = Object.values(result.data);
+        return (isCompositeQuery) ? result.data : dataValues[0];
+    }
+    catch (error) {
+        return error;
+    }
+}
+
+const getSourceDetailQuery = `
+    query GetSourceDetail($ids: [GUID!]!) {
+        getSourceDetailById(ids: $ids, type: LOGICAL_TABLE) {
+        id
+        name
+        description
+        authorName
+        authorDisplayName
+        isExternal
+        type
+        created
+        modified
+        columns {
+            id
+            name
+            author
+            authorDisplayName
+            description
+            dataType
+            type
+            modified
+            ownerName
+            owner
+            dataRecency
+            sources {
+            tableId
+            tableName
+            columnId
+            columnName
+            __typename
+            }
+            synonyms
+            cohortAnswerId
+            __typename
+        }
+        relationships
+        destinationRelationships
+        dataSourceId
+        __typename
+        }
+    }  
+`;
+const sourceDetailCache = new Map();
+/**
+ *
+ * @param thoughtSpotHost
+ * @param sourceId
+ */
+async function getSourceDetail(thoughtSpotHost, sourceId) {
+    if (sourceDetailCache.get(sourceId)) {
+        return sourceDetailCache.get(sourceId);
+    }
+    const details = await graphqlQuery({
+        query: getSourceDetailQuery,
+        variables: {
+            ids: [sourceId],
+        },
+        thoughtSpotHost,
+    });
+    const souceDetails = details[0];
+    if (souceDetails) {
+        sourceDetailCache.set(sourceId, souceDetails);
+    }
+    return souceDetails;
+}
+
+const bachSessionId = `
+id {
+    sessionId
+    genNo
+    acSession {
+        sessionId
+        genNo
+    }
+}
+`;
+const getUnaggregatedAnswerSession = `
+mutation GetUnAggregatedAnswerSession($session: BachSessionIdInput!, $columns: [UserPointSelectionInput!]!) {
+    Answer__getUnaggregatedAnswer(session: $session, columns: $columns) {
+        ${bachSessionId}
+        answer {
+            visualizations {
+                ... on TableViz {
+                    columns {
+                        column {
+                            id
+                            name
+                            referencedColumns {
+                                guid
+                                displayName
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}  
+`;
+const removeColumns = `
+mutation RemoveColumns($session: BachSessionIdInput!, $logicalColumnIds: [GUID!], $columnIds: [GUID!]) {
+    Answer__removeColumns(
+        session: $session
+        logicalColumnIds: $logicalColumnIds
+        columnIds: $columnIds
+        ) {
+            ${bachSessionId}
+    }
+}
+    `;
+const addColumns = `
+    mutation AddColumns($session: BachSessionIdInput!, $columns: [AnswerColumnInfo!]!) {
+        Answer__addColumn(session: $session, columns: $columns) {
+            ${bachSessionId}
+        }
+    }
+    `;
+const addFilter = `
+    mutation AddUpdateFilter($session: BachSessionIdInput!, $params: AddUpdateFilterInput!) {
+        Answer__addUpdateFilter(session: $session, params: $params) {
+            ${bachSessionId}
+        }
+    }
+`;
+const getAnswer = `
+    query GetAnswer($session: BachSessionIdInput!) {
+        getAnswer(session: $session) {
+            ${bachSessionId}
+            answer {
+                id
+                name
+                description
+                displayMode
+                sources {
+                    header {
+                        guid
+                        displayName
+                    }
+                }
+                filterGroups {
+                    columnInfo {
+                        name
+                        referencedColumns {
+                            guid
+                            displayName
+                        }
+                    }
+                    filters {
+                        filterContent {
+                            filterType
+                            negate
+                            value {
+                                key
+                            }
+                        }
+                    }
+                }
+                metadata {
+                    author
+                    authorId
+                    createdAt
+                    isDiscoverable
+                    isHidden
+                    modifiedAt
+                    tags
+                }
+                visualizations {
+                    ... on TableViz {
+                        columns {
+                            column {
+                                id
+                                name
+                                referencedColumns {
+                                    guid
+                                    displayName
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+`;
+const getAnswerData = `
+    query GetTableWithHeadlineData($session: BachSessionIdInput!, $deadline: Int!, $dataPaginationParams: DataPaginationParamsInput!) {
+        getAnswer(session: $session) {
+            ${bachSessionId}
+            answer {
+                id
+                visualizations {
+                    id
+                    ... on TableViz {
+                        columns {
+                            column {
+                                id
+                                name
+                                type
+                                aggregationType
+                                dataType
+                            }
+                        }
+                        data(deadline: $deadline, pagination: $dataPaginationParams)
+                    }          
+                }
+            }
+        }
+    }
+`;
+
+// eslint-disable-next-line no-shadow
+var OperationType;
+(function (OperationType) {
+    OperationType["GetChartWithData"] = "GetChartWithData";
+    OperationType["GetTableWithHeadlineData"] = "GetTableWithHeadlineData";
+})(OperationType || (OperationType = {}));
+/**
+ * Class representing the answer service provided with the
+ * custom action payload. This service could be used to run
+ * graphql queries in the context of the answer on which the
+ * custom action was triggered.
+ * @example
+ * ```js
+ *  embed.on(EmbedEvent.CustomAction, e => {
+ *     const underlying = await e.answerService.getUnderlyingDataForPoint([
+ *       'col name 1'
+ *     ]);
+ *     const data = await underlying.fetchData(0, 100);
+ *  })
+ * ```
+ * @example
+ * ```js
+ * embed.on(EmbedEvent.Data, async (e) => {
+ *     const service = await embed.getAnswerService();
+ *     await service.addColumns([
+ *         "<column guid>"
+ *     ]);
+ *     console.log(await service.fetchData());
+ * });
+ * ```
+ * @version SDK: 1.25.0| ThoughtSpot: 9.10.0.cl
+ * @group Events
+ */
+class AnswerService {
+    /**
+     * Should not need to be called directly.
+     * @param session
+     * @param answer
+     * @param thoughtSpotHost
+     * @param selectedPoints
+     */
+    constructor(session, answer, thoughtSpotHost, selectedPoints) {
+        this.session = session;
+        this.thoughtSpotHost = thoughtSpotHost;
+        this.selectedPoints = selectedPoints;
+        this.session = removeTypename(session);
+        if (!answer) {
+            this.answer = this.executeQuery(getAnswer, {}).then((data) => data === null || data === void 0 ? void 0 : data.answer);
+        }
+        else {
+            this.answer = answer;
+        }
+    }
+    /**
+     * Get the details about the source used in the answer.
+     * This can be used to get the list of all columns in the data source for example.
+     */
+    async getSourceDetail() {
+        const sourceId = (await this.answer).sources[0].header.guid;
+        return getSourceDetail(this.thoughtSpotHost, sourceId);
+    }
+    /**
+     * Remove columnIds and return updated answer session.
+     * @param columnIds
+     * @returns
+     */
+    async removeColumns(columnIds) {
+        return this.executeQuery(removeColumns, {
+            logicalColumnIds: columnIds,
+        });
+    }
+    /**
+     * Add columnIds and return updated answer session.
+     * @param columnIds
+     * @returns
+     */
+    async addColumns(columnIds) {
+        return this.executeQuery(addColumns, {
+            columns: columnIds.map((colId) => ({ logicalColumnId: colId })),
+        });
+    }
+    /**
+     * Add columns by names and return updated answer session.
+     * @param columnNames
+     * @returns
+     * @example
+     * ```js
+     * embed.on(EmbedEvent.Data, async (e) => {
+     *    const service = await embed.getAnswerService();
+     *    await service.addColumnsByName([
+     *      "col name 1",
+     *      "col name 2"
+     *    ]);
+     *    console.log(await service.fetchData());
+     * });
+     */
+    async addColumnsByName(columnNames) {
+        const sourceDetail = await this.getSourceDetail();
+        const columnGuids = getGuidsFromColumnNames(sourceDetail, columnNames);
+        return this.addColumns([...columnGuids]);
+    }
+    /**
+     * Add a filter to the answer.
+     * @param columnName
+     * @param operator
+     * @param values
+     * @returns
+     */
+    async addFilter(columnName, operator, values) {
+        const sourceDetail = await this.getSourceDetail();
+        const columnGuids = getGuidsFromColumnNames(sourceDetail, [columnName]);
+        return this.executeQuery(addFilter, {
+            params: {
+                filterContent: [{
+                        filterType: operator,
+                        value: values.map((v) => {
+                            const [type, prefix] = getTypeFromValue(v);
+                            return {
+                                type: type.toUpperCase(),
+                                [`${prefix}Value`]: v,
+                            };
+                        }),
+                    }],
+                filterGroupId: {
+                    logicalColumnId: columnGuids.values().next().value,
+                },
+            },
+        });
+    }
+    /**
+     * Fetch data from the answer.
+     * @param offset
+     * @param size
+     * @returns
+     */
+    async fetchData(offset = 0, size = 1000) {
+        const { answer } = await this.executeQuery(getAnswerData, {
+            deadline: 0,
+            dataPaginationParams: {
+                isClientPaginated: true,
+                offset,
+                size,
+            },
+        });
+        const { columns, data } = answer.visualizations.find((viz) => !!viz.data) || {};
+        return {
+            columns,
+            data,
+        };
+    }
+    /**
+     * Fetch the data for the answer as a CSV blob. This might be
+     * quicker for larger data.
+     * @param userLocale
+     * @param includeInfo Include the CSV header in the output
+     * @returns Response
+     */
+    async fetchCSVBlob(userLocale = 'en-us', includeInfo = false) {
+        const fetchUrl = this.getFetchCSVBlobUrl(userLocale, includeInfo);
+        return tokenizedFetch(fetchUrl, {
+            credentials: 'include',
+        });
+    }
+    /**
+     * Just get the internal URL for this answer's data
+     * as a CSV blob.
+     * @param userLocale
+     * @param includeInfo
+     * @returns
+     */
+    getFetchCSVBlobUrl(userLocale = 'en-us', includeInfo = false) {
+        return `${this.thoughtSpotHost}/prism/download/answer/csv?sessionId=${this.session.sessionId}&genNo=${this.session.genNo}&userLocale=${userLocale}&exportFileName=data&hideCsvHeader=${!includeInfo}`;
+    }
+    /**
+     * Get underlying data given a point and the output column names.
+     * In case of a context menu action, the selectedPoints are
+     * automatically passed.
+     * @param outputColumnNames
+     * @param selectedPoints
+     * @example
+     * ```js
+     *  embed.on(EmbedEvent.CustomAction, e => {
+     *     const underlying = await e.answerService.getUnderlyingDataForPoint([
+     *       'col name 1' // The column should exist in the data source.
+     *     ]);
+     *     const data = await underlying.fetchData(0, 100);
+     *  })
+     * ```
+     * @version SDK: 1.25.0| ThoughtSpot: 9.10.0.cl
+     */
+    async getUnderlyingDataForPoint(outputColumnNames, selectedPoints) {
+        if (!selectedPoints && !this.selectedPoints) {
+            throw new Error('Needs to be triggered in context of a point');
+        }
+        if (!selectedPoints) {
+            selectedPoints = getSelectedPointsForUnderlyingDataQuery(this.selectedPoints);
+        }
+        const sourceDetail = await this.getSourceDetail();
+        const ouputColumnGuids = getGuidsFromColumnNames(sourceDetail, outputColumnNames);
+        const unAggAnswer = await graphqlQuery({
+            query: getUnaggregatedAnswerSession,
+            variables: {
+                session: this.session,
+                columns: selectedPoints,
+            },
+            thoughtSpotHost: this.thoughtSpotHost,
+        });
+        const unaggAnswerSession = new AnswerService(unAggAnswer.id, unAggAnswer.answer, this.thoughtSpotHost);
+        const currentColumns = new Set(unAggAnswer.answer.visualizations[0].columns
+            .map((c) => c.column.referencedColumns[0].guid));
+        const columnsToAdd = [...ouputColumnGuids].filter((col) => !currentColumns.has(col));
+        if (columnsToAdd.length) {
+            await unaggAnswerSession.addColumns(columnsToAdd);
+        }
+        const columnsToRemove = [...currentColumns].filter((col) => !ouputColumnGuids.has(col));
+        if (columnsToRemove.length) {
+            await unaggAnswerSession.removeColumns(columnsToRemove);
+        }
+        return unaggAnswerSession;
+    }
+    /**
+     * Execute a custom graphql query in the context of the answer.
+     * @param query graphql query
+     * @param variables graphql variables
+     * @returns
+     */
+    async executeQuery(query, variables) {
+        const data = await graphqlQuery({
+            query,
+            variables: {
+                session: this.session,
+                ...variables,
+            },
+            thoughtSpotHost: this.thoughtSpotHost,
+            isCompositeQuery: false,
+        });
+        this.session = deepMerge(this.session, (data === null || data === void 0 ? void 0 : data.id) || {});
+        return data;
+    }
+    /**
+     * Get the internal session details for the answer.
+     * @returns
+     */
+    getSession() {
+        return this.session;
+    }
+    getAnswer() {
+        return this.answer;
+    }
+}
+/**
+ *
+ * @param sourceDetail
+ * @param colNames
+ */
+function getGuidsFromColumnNames(sourceDetail, colNames) {
+    const cols = sourceDetail.columns.reduce((colSet, col) => {
+        colSet[col.name.toLowerCase()] = col;
+        return colSet;
+    }, {});
+    return new Set(colNames.map((colName) => {
+        const col = cols[colName.toLowerCase()];
+        return col.id;
+    }));
+}
+/**
+ *
+ * @param selectedPoints
+ */
+function getSelectedPointsForUnderlyingDataQuery(selectedPoints) {
+    const underlyingDataPoint = [];
+    /**
+     *
+     * @param colVal
+     */
+    function addPointFromColVal(colVal) {
+        var _a;
+        const dataType = colVal.column.dataType;
+        const id = colVal.column.id;
+        let dataValue;
+        if (dataType === 'DATE') {
+            if (Number.isFinite(colVal.value)) {
+                dataValue = [{
+                        epochRange: {
+                            startEpoch: colVal.value,
+                        },
+                    }];
+                // Case for custom calendar.
+            }
+            else if ((_a = colVal.value) === null || _a === void 0 ? void 0 : _a.v) {
+                dataValue = [{
+                        epochRange: {
+                            startEpoch: colVal.value.v.s,
+                            endEpoch: colVal.value.v.e,
+                        },
+                    }];
+            }
+        }
+        else {
+            dataValue = [{ value: colVal.value }];
+        }
+        underlyingDataPoint.push({
+            columnId: colVal.column.id,
+            dataValue,
+        });
+    }
+    selectedPoints.forEach((p) => {
+        p.selectedAttributes.forEach(addPointFromColVal);
+    });
+    return underlyingDataPoint;
+}
+
+/**
+ * Copyright (c) 2023
+ *
+ * Utilities related to reading configuration objects
+ * @summary Config-related utils
+ * @author Ayon Ghosh <ayon.ghosh@thoughtspot.com>
+ */
+const urlRegex = new RegExp([
+    '(^(https?:)//)?',
+    '(([^:/?#]*)(?::([0-9]+))?)',
+    '(/{0,1}[^?#]*)',
+    '(\\?[^#]*|)',
+    '(#.*|)$', // hash
+].join(''));
+/**
+ * Parse and construct the ThoughtSpot hostname or IP address
+ * from the embed configuration object.
+ * @param config
+ */
+const getThoughtSpotHost = (config) => {
+    if (!config.thoughtSpotHost) {
+        throw new Error(ERROR_MESSAGE.INVALID_THOUGHTSPOT_HOST);
+    }
+    const urlParts = config.thoughtSpotHost.match(urlRegex);
+    if (!urlParts) {
+        throw new Error(ERROR_MESSAGE.INVALID_THOUGHTSPOT_HOST);
+    }
+    const protocol = urlParts[2] || window.location.protocol;
+    const host = urlParts[3];
+    let path = urlParts[6];
+    // Lose the trailing / if any
+    if (path.charAt(path.length - 1) === '/') {
+        path = path.substring(0, path.length - 1);
+    }
+    // const urlParams = urlParts[7];
+    // const hash = urlParts[8];
+    return `${protocol}//${host}${path}`;
+};
+const getV2BasePath = (config) => {
+    if (config.basepath) {
+        return config.basepath;
+    }
+    const tsHost = getThoughtSpotHost(config);
+    // This is to handle when e2e's. Search is run on pods for
+    // comp-blink-test-pipeline with baseUrl=https://localhost:8443.
+    // This is to handle when the developer is developing in their local
+    // environment.
+    if (tsHost.includes('://localhost') && !tsHost.includes(':8443')) {
+        return '';
+    }
+    return 'v2';
+};
+/**
+ * It is a good idea to keep URLs under 2000 chars.
+ * If this is ever breached, since we pass view configuration through
+ * URL params, we would like to log a warning.
+ * Reference: https://stackoverflow.com/questions/417142/what-is-the-maximum-length-of-a-url-in-different-browsers
+ */
+const URL_MAX_LENGTH = 2000;
+/**
+ * The default CSS dimensions of the embedded app
+ */
+const DEFAULT_EMBED_WIDTH = '100%';
+const DEFAULT_EMBED_HEIGHT = '100%';
 
 var Config = {
     DEBUG: false,
@@ -11970,7 +12797,6 @@ let isMixpanelInitialized = false;
 let eventQueue = [];
 /**
  * Pushes the event with its Property key-value map to mixpanel.
- *
  * @param eventId
  * @param eventProps
  */
@@ -12000,6 +12826,7 @@ function emptyQueue() {
 function initMixpanel(sessionInfo) {
     var _a;
     if (!sessionInfo || !sessionInfo.mixpanelToken) {
+        logger.error(ERROR_MESSAGE.MIXPANEL_TOKEN_NOT_FOUND);
         return;
     }
     // On a public cluster the user is anonymous, so don't set the identify to
@@ -12025,1001 +12852,6 @@ function initMixpanel(sessionInfo) {
     catch (e) {
         logger.error('Error initializing mixpanel', e);
     }
-}
-
-let config = {};
-/**
- * Gets the configuration embed was initialized with.
- *
- * @returns {@link EmbedConfig} The configuration embed was initialized with.
- * @version SDK: 1.19.0 | ThoughtSpot: *
- * @group Global methods
- */
-const getEmbedConfig = () => config;
-/**
- * Sets the configuration embed was initialized with.
- * And returns the new configuration.
- *
- * @param newConfig The configuration to set.
- * @version SDK: 1.27.0 | ThoughtSpot: *
- * @group Global methods
- */
-const setEmbedConfig = (newConfig) => {
-    config = newConfig;
-    return newConfig;
-};
-
-/**
- * Fetch wrapper that adds the authentication token to the request.
- * Use this to call the ThoughtSpot APIs when using the visual embed sdk.
- *
- * @param input
- * @param init
- * @version SDK: 1.28.0
- * @group Global methods
- */
-const tokenizedFetch = async (input, init) => {
-    const embedConfig = getEmbedConfig();
-    if (embedConfig.authType !== AuthType.TrustedAuthTokenCookieless) {
-        return fetch(input, init);
-    }
-    const req = new Request(input, init);
-    const authToken = await getAuthenticationToken(embedConfig);
-    if (authToken) {
-        req.headers.append('Authorization', `Bearer ${authToken}`);
-    }
-    return fetch(req);
-};
-
-/**
- *
- * @param url
- * @param options
- */
-function tokenisedFailureLoggedFetch(url, options = {}) {
-    return tokenizedFetch(url, options).then(async (r) => {
-        var _a;
-        if (!r.ok && r.type !== 'opaqueredirect' && r.type !== 'opaque') {
-            logger.error('Failure', await ((_a = r.text) === null || _a === void 0 ? void 0 : _a.call(r)));
-        }
-        return r;
-    });
-}
-/**
- *
- * @param authVerificationUrl
- */
-function fetchSessionInfoService(authVerificationUrl) {
-    return tokenisedFailureLoggedFetch(authVerificationUrl, {
-        credentials: 'include',
-    });
-}
-/**
- *
- * @param thoughtSpotHost
- */
-async function fetchLogoutService(thoughtSpotHost) {
-    return tokenisedFailureLoggedFetch(`${thoughtSpotHost}${EndPoints.LOGOUT}`, {
-        credentials: 'include',
-        method: 'POST',
-        headers: {
-            'x-requested-by': 'ThoughtSpot',
-        },
-    });
-}
-
-// eslint-disable-next-line import/no-mutable-exports
-let loggedInStatus = false;
-// eslint-disable-next-line import/no-mutable-exports
-let samlAuthWindow = null;
-// eslint-disable-next-line import/no-mutable-exports
-let samlCompletionPromise = null;
-let sessionInfo = null;
-let sessionInfoResolver = null;
-const sessionInfoPromise = new Promise((resolve) => {
-    sessionInfoResolver = resolve;
-});
-let releaseVersion = '';
-const SSO_REDIRECTION_MARKER_GUID = '5e16222e-ef02-43e9-9fbd-24226bf3ce5b';
-/**
- * Enum for auth failure types. This is the parameter passed to the listner
- * of {@link AuthStatus.FAILURE}.
- *
- * @group Authentication / Init
- */
-var AuthFailureType;
-(function (AuthFailureType) {
-    AuthFailureType["SDK"] = "SDK";
-    AuthFailureType["NO_COOKIE_ACCESS"] = "NO_COOKIE_ACCESS";
-    AuthFailureType["EXPIRY"] = "EXPIRY";
-    AuthFailureType["OTHER"] = "OTHER";
-})(AuthFailureType || (AuthFailureType = {}));
-/**
- * Enum for auth status emitted by the emitter returned from {@link init}.
- *
- * @group Authentication / Init
- */
-var AuthStatus;
-(function (AuthStatus) {
-    /**
-     * Emits when the SDK fails to authenticate
-     */
-    AuthStatus["FAILURE"] = "FAILURE";
-    /**
-     * Emits when the SDK authenticates successfully
-     */
-    AuthStatus["SDK_SUCCESS"] = "SDK_SUCCESS";
-    /**
-     * Emits when the app sends an authentication success message
-     */
-    AuthStatus["SUCCESS"] = "SUCCESS";
-    /**
-     * Emits when a user logs out
-     */
-    AuthStatus["LOGOUT"] = "LOGOUT";
-    /**
-     * Emitted when inPopup is true in the SAMLRedirect flow and the
-     * popup is waiting to be triggered either programmatically
-     * or by the trigger button.
-     *
-     * @version SDK: 1.19.0
-     */
-    AuthStatus["WAITING_FOR_POPUP"] = "WAITING_FOR_POPUP";
-})(AuthStatus || (AuthStatus = {}));
-/**
- * Events which can be triggered on the emitter returned from {@link init}.
- *
- * @group Authentication / Init
- */
-var AuthEvent;
-(function (AuthEvent) {
-    /**
-     * Manually trigger the SSO popup. This is useful when
-     * authStatus is SAMLRedirect/OIDCRedirect and inPopup is set to true
-     */
-    AuthEvent["TRIGGER_SSO_POPUP"] = "TRIGGER_SSO_POPUP";
-})(AuthEvent || (AuthEvent = {}));
-let authEE;
-/**
- *
- * @param eventEmitter
- */
-function setAuthEE(eventEmitter) {
-    authEE = eventEmitter;
-}
-/**
- *
- */
-function notifyAuthSDKSuccess() {
-    if (!authEE) {
-        logger.error('SDK not initialized');
-        return;
-    }
-    authEE.emit(AuthStatus.SDK_SUCCESS);
-}
-/**
- *
- */
-function notifyAuthSuccess() {
-    if (!authEE) {
-        logger.error('SDK not initialized');
-        return;
-    }
-    authEE.emit(AuthStatus.SUCCESS, sessionInfo);
-}
-/**
- *
- * @param failureType
- */
-function notifyAuthFailure(failureType) {
-    if (!authEE) {
-        logger.error('SDK not initialized');
-        return;
-    }
-    authEE.emit(AuthStatus.FAILURE, failureType);
-}
-/**
- *
- */
-function notifyLogout() {
-    if (!authEE) {
-        logger.error('SDK not initialized');
-        return;
-    }
-    authEE.emit(AuthStatus.LOGOUT);
-}
-const initSession = (sessionDetails) => {
-    const embedConfig = getEmbedConfig();
-    if (sessionInfo == null) {
-        sessionInfo = sessionDetails;
-        if (!embedConfig.disableSDKTracking) {
-            initMixpanel(sessionInfo);
-        }
-        sessionInfoResolver(sessionInfo);
-    }
-};
-const getSessionDetails = (sessionInfoResp) => {
-    const devMixpanelToken = sessionInfoResp.configInfo.mixpanelConfig.devSdkKey;
-    const prodMixpanelToken = sessionInfoResp.configInfo.mixpanelConfig.prodSdkKey;
-    const mixpanelToken = sessionInfoResp.configInfo.mixpanelConfig.production
-        ? prodMixpanelToken
-        : devMixpanelToken;
-    return {
-        userGUID: sessionInfoResp.userGUID,
-        mixpanelToken,
-        isPublicUser: sessionInfoResp.configInfo.isPublicUser,
-        releaseVersion: sessionInfoResp.releaseVersion,
-        clusterId: sessionInfoResp.configInfo.selfClusterId,
-        clusterName: sessionInfoResp.configInfo.selfClusterName,
-        ...sessionInfoResp,
-    };
-};
-/**
- * Check if we are logged into the ThoughtSpot cluster
- *
- * @param thoughtSpotHost The ThoughtSpot cluster hostname or IP
- */
-async function isLoggedIn(thoughtSpotHost) {
-    const authVerificationUrl = `${thoughtSpotHost}${EndPoints.AUTH_VERIFICATION}`;
-    let response = null;
-    try {
-        response = await fetchSessionInfoService(authVerificationUrl);
-        const sessionInfoResp = await response.json();
-        const sessionDetails = getSessionDetails(sessionInfoResp);
-        // Store user session details from session info
-        initSession(sessionDetails);
-        releaseVersion = sessionInfoResp.releaseVersion;
-    }
-    catch (e) {
-        return false;
-    }
-    return response.status === 200;
-}
-/**
- * Return releaseVersion if available
- */
-function getReleaseVersion() {
-    return releaseVersion;
-}
-/**
- * Return a promise that resolves with the session information when
- * authentication is successful. And info is available.
- *
- * @group Global methods
- */
-function getSessionInfo() {
-    return sessionInfoPromise;
-}
-/**
- * Check if we are stuck at the SSO redirect URL
- */
-function isAtSSORedirectUrl() {
-    return window.location.href.indexOf(SSO_REDIRECTION_MARKER_GUID) >= 0;
-}
-/**
- * Remove the SSO redirect URL marker
- */
-function removeSSORedirectUrlMarker() {
-    // Note (sunny): This will leave a # around even if it was not in the URL
-    // to begin with. Trying to remove the hash by changing window.location will
-    // reload the page which we don't want. We'll live with adding an
-    // unnecessary hash to the parent page URL until we find any use case where
-    // that creates an issue.
-    window.location.hash = window.location.hash.replace(SSO_REDIRECTION_MARKER_GUID, '');
-}
-/**
- * Perform token based authentication
- *
- * @param embedConfig The embed configuration
- */
-const doTokenAuth = async (embedConfig) => {
-    const { thoughtSpotHost, username, authEndpoint, getAuthToken, } = embedConfig;
-    if (!authEndpoint && !getAuthToken) {
-        throw new Error('Either auth endpoint or getAuthToken function must be provided');
-    }
-    loggedInStatus = await isLoggedIn(thoughtSpotHost);
-    if (!loggedInStatus) {
-        const authToken = await getAuthenticationToken(embedConfig);
-        let resp;
-        try {
-            resp = await fetchAuthPostService(thoughtSpotHost, username, authToken);
-        }
-        catch (e) {
-            resp = await fetchAuthService(thoughtSpotHost, username, authToken);
-        }
-        // token login issues a 302 when successful
-        loggedInStatus = resp.ok || resp.type === 'opaqueredirect';
-        if (loggedInStatus && embedConfig.detectCookieAccessSlow) {
-            // When 3rd party cookie access is blocked, this will fail because
-            // cookies will not be sent with the call.
-            loggedInStatus = await isLoggedIn(thoughtSpotHost);
-        }
-    }
-    return loggedInStatus;
-};
-/**
- * Validate embedConfig parameters required for cookielessTokenAuth
- *
- * @param embedConfig The embed configuration
- */
-const doCookielessTokenAuth = async (embedConfig) => {
-    const { authEndpoint, getAuthToken } = embedConfig;
-    if (!authEndpoint && !getAuthToken) {
-        throw new Error('Either auth endpoint or getAuthToken function must be provided');
-    }
-    let authSuccess = false;
-    try {
-        const authToken = await getAuthenticationToken(embedConfig);
-        if (authToken) {
-            authSuccess = true;
-        }
-    }
-    catch {
-        authSuccess = false;
-    }
-    return authSuccess;
-};
-/**
- * Perform basic authentication to the ThoughtSpot cluster using the cluster
- * credentials.
- *
- * Warning: This feature is primarily intended for developer testing. It is
- * strongly advised not to use this authentication method in production.
- *
- * @param embedConfig The embed configuration
- */
-const doBasicAuth = async (embedConfig) => {
-    const { thoughtSpotHost, username, password } = embedConfig;
-    const loggedIn = await isLoggedIn(thoughtSpotHost);
-    if (!loggedIn) {
-        const response = await fetchBasicAuthService(thoughtSpotHost, username, password);
-        loggedInStatus = response.ok;
-        if (embedConfig.detectCookieAccessSlow) {
-            loggedInStatus = await isLoggedIn(thoughtSpotHost);
-        }
-    }
-    else {
-        loggedInStatus = true;
-    }
-    return loggedInStatus;
-};
-/**
- *
- * @param ssoURL
- * @param triggerContainer
- * @param triggerText
- */
-async function samlPopupFlow(ssoURL, triggerContainer, triggerText) {
-    const openPopup = () => {
-        if (samlAuthWindow === null || samlAuthWindow.closed) {
-            samlAuthWindow = window.open(ssoURL, '_blank', 'location=no,height=570,width=520,scrollbars=yes,status=yes');
-        }
-        else {
-            samlAuthWindow.focus();
-        }
-    };
-    authEE === null || authEE === void 0 ? void 0 : authEE.emit(AuthStatus.WAITING_FOR_POPUP);
-    const containerEl = getDOMNode(triggerContainer);
-    if (containerEl) {
-        containerEl.innerHTML = '<button id="ts-auth-btn" class="ts-auth-btn" style="margin: auto;"></button>';
-        const authElem = document.getElementById('ts-auth-btn');
-        authElem.textContent = triggerText;
-        authElem.addEventListener('click', openPopup, { once: true });
-    }
-    samlCompletionPromise = samlCompletionPromise
-        || new Promise((resolve, reject) => {
-            window.addEventListener('message', (e) => {
-                if (e.data.type === EmbedEvent.SAMLComplete) {
-                    e.source.close();
-                    resolve();
-                }
-            });
-        });
-    authEE === null || authEE === void 0 ? void 0 : authEE.once(AuthEvent.TRIGGER_SSO_POPUP, openPopup);
-    return samlCompletionPromise;
-}
-/**
- * Perform SAML authentication
- *
- * @param embedConfig The embed configuration
- * @param ssoEndPoint
- */
-const doSSOAuth = async (embedConfig, ssoEndPoint) => {
-    const { thoughtSpotHost } = embedConfig;
-    const loggedIn = await isLoggedIn(thoughtSpotHost);
-    if (loggedIn) {
-        if (isAtSSORedirectUrl()) {
-            removeSSORedirectUrlMarker();
-        }
-        loggedInStatus = true;
-        return;
-    }
-    // we have already tried authentication and it did not succeed, restore
-    // the current URL to the original one and invoke the callback.
-    if (isAtSSORedirectUrl()) {
-        removeSSORedirectUrlMarker();
-        loggedInStatus = false;
-        return;
-    }
-    const ssoURL = `${thoughtSpotHost}${ssoEndPoint}`;
-    if (embedConfig.inPopup) {
-        await samlPopupFlow(ssoURL, embedConfig.authTriggerContainer, embedConfig.authTriggerText);
-        loggedInStatus = await isLoggedIn(thoughtSpotHost);
-        return;
-    }
-    window.location.href = ssoURL;
-};
-const doSamlAuth = async (embedConfig) => {
-    const { thoughtSpotHost } = embedConfig;
-    // redirect for SSO, when the SSO authentication is done, this page will be
-    // loaded again and the same JS will execute again.
-    const ssoRedirectUrl = embedConfig.inPopup
-        ? `${thoughtSpotHost}/v2/#/embed/saml-complete`
-        : getRedirectUrl(window.location.href, SSO_REDIRECTION_MARKER_GUID, embedConfig.redirectPath);
-    // bring back the page to the same URL
-    const ssoEndPoint = `${EndPoints.SAML_LOGIN_TEMPLATE(encodeURIComponent(ssoRedirectUrl))}`;
-    await doSSOAuth(embedConfig, ssoEndPoint);
-    return loggedInStatus;
-};
-const doOIDCAuth = async (embedConfig) => {
-    const { thoughtSpotHost } = embedConfig;
-    // redirect for SSO, when the SSO authentication is done, this page will be
-    // loaded again and the same JS will execute again.
-    const ssoRedirectUrl = embedConfig.noRedirect || embedConfig.inPopup
-        ? `${thoughtSpotHost}/v2/#/embed/saml-complete`
-        : getRedirectUrl(window.location.href, SSO_REDIRECTION_MARKER_GUID, embedConfig.redirectPath);
-    // bring back the page to the same URL
-    const ssoEndPoint = `${EndPoints.OIDC_LOGIN_TEMPLATE(encodeURIComponent(ssoRedirectUrl))}`;
-    await doSSOAuth(embedConfig, ssoEndPoint);
-    return loggedInStatus;
-};
-const logout = async (embedConfig) => {
-    const { thoughtSpotHost } = embedConfig;
-    await fetchLogoutService(thoughtSpotHost);
-    resetCachedAuthToken();
-    const thoughtspotIframes = document.querySelectorAll("[data-ts-iframe='true']");
-    if (thoughtspotIframes === null || thoughtspotIframes === void 0 ? void 0 : thoughtspotIframes.length) {
-        thoughtspotIframes.forEach((el) => {
-            el.parentElement.innerHTML = embedConfig.loginFailedMessage;
-        });
-    }
-    loggedInStatus = false;
-    return loggedInStatus;
-};
-/**
- * Perform authentication on the ThoughtSpot cluster
- *
- * @param embedConfig The embed configuration
- */
-const authenticate = async (embedConfig) => {
-    const { authType } = embedConfig;
-    switch (authType) {
-        case AuthType.SSO:
-        case AuthType.SAMLRedirect:
-        case AuthType.SAML:
-            return doSamlAuth(embedConfig);
-        case AuthType.OIDC:
-        case AuthType.OIDCRedirect:
-            return doOIDCAuth(embedConfig);
-        case AuthType.AuthServer:
-        case AuthType.TrustedAuthToken:
-            return doTokenAuth(embedConfig);
-        case AuthType.TrustedAuthTokenCookieless:
-            return doCookielessTokenAuth(embedConfig);
-        case AuthType.Basic:
-            return doBasicAuth(embedConfig);
-        default:
-            return Promise.resolve(true);
-    }
-};
-
-const ERROR_MESSAGE = {
-    INVALID_THOUGHTSPOT_HOST: 'Error parsing ThoughtSpot host. Please provide a valid URL.',
-    LIVEBOARD_VIZ_ID_VALIDATION: 'Please provide either liveboardId or pinboardId',
-    TRIGGER_TIMED_OUT: 'Trigger timedout in getting response',
-    SEARCHEMBED_BETA_WRANING_MESSAGE: 'Search Embed is in Beta in this release.',
-    SAGE_EMBED_BETA_WARNING_MESSAGE: 'Sage Embed is in Beta in this release.',
-};
-
-/**
- * Copyright (c) 2023
- *
- * Utilities related to reading configuration objects
- *
- * @summary Config-related utils
- * @author Ayon Ghosh <ayon.ghosh@thoughtspot.com>
- */
-const urlRegex = new RegExp([
-    '(^(https?:)//)?',
-    '(([^:/?#]*)(?::([0-9]+))?)',
-    '(/{0,1}[^?#]*)',
-    '(\\?[^#]*|)',
-    '(#.*|)$', // hash
-].join(''));
-/**
- * Parse and construct the ThoughtSpot hostname or IP address
- * from the embed configuration object.
- *
- * @param config
- */
-const getThoughtSpotHost = (config) => {
-    if (!config.thoughtSpotHost) {
-        throw new Error(ERROR_MESSAGE.INVALID_THOUGHTSPOT_HOST);
-    }
-    const urlParts = config.thoughtSpotHost.match(urlRegex);
-    if (!urlParts) {
-        throw new Error(ERROR_MESSAGE.INVALID_THOUGHTSPOT_HOST);
-    }
-    const protocol = urlParts[2] || window.location.protocol;
-    const host = urlParts[3];
-    let path = urlParts[6];
-    // Lose the trailing / if any
-    if (path.charAt(path.length - 1) === '/') {
-        path = path.substring(0, path.length - 1);
-    }
-    // const urlParams = urlParts[7];
-    // const hash = urlParts[8];
-    return `${protocol}//${host}${path}`;
-};
-const getV2BasePath = (config) => {
-    if (config.basepath) {
-        return config.basepath;
-    }
-    const tsHost = getThoughtSpotHost(config);
-    // This is to handle when e2e's. Search is run on pods for
-    // comp-blink-test-pipeline with baseUrl=https://localhost:8443.
-    // This is to handle when the developer is developing in their local
-    // environment.
-    if (tsHost.includes('://localhost') && !tsHost.includes(':8443')) {
-        return '';
-    }
-    return 'v2';
-};
-/**
- * It is a good idea to keep URLs under 2000 chars.
- * If this is ever breached, since we pass view configuration through
- * URL params, we would like to log a warning.
- * Reference: https://stackoverflow.com/questions/417142/what-is-the-maximum-length-of-a-url-in-different-browsers
- */
-const URL_MAX_LENGTH = 2000;
-/**
- * The default CSS dimensions of the embedded app
- */
-const DEFAULT_EMBED_WIDTH = '100%';
-const DEFAULT_EMBED_HEIGHT = '100%';
-
-/**
- *
- * @param root0
- * @param root0.query
- * @param root0.variables
- * @param root0.thoughtSpotHost
- * @param root0.isCompositeQuery
- */
-async function graphqlQuery({ query, variables, thoughtSpotHost, isCompositeQuery = false, }) {
-    const operationName = getOperationNameFromQuery(query);
-    try {
-        const response = await fetch(`${thoughtSpotHost}/prism/?op=${operationName}`, {
-            method: 'POST',
-            headers: {
-                'content-type': 'application/json;charset=UTF-8',
-                'x-requested-by': 'ThoughtSpot',
-                accept: '*/*',
-                'accept-language': 'en-us',
-            },
-            body: JSON.stringify({
-                operationName,
-                query,
-                variables,
-            }),
-            credentials: 'include',
-        });
-        const result = await response.json();
-        const dataValues = Object.values(result.data);
-        return (isCompositeQuery) ? result.data : dataValues[0];
-    }
-    catch (error) {
-        return error;
-    }
-}
-
-const getSourceDetailQuery = `
-    query GetSourceDetail($ids: [GUID!]!) {
-        getSourceDetailById(ids: $ids, type: LOGICAL_TABLE) {
-        id
-        name
-        description
-        authorName
-        authorDisplayName
-        isExternal
-        type
-        created
-        modified
-        columns {
-            id
-            name
-            author
-            authorDisplayName
-            description
-            dataType
-            type
-            modified
-            ownerName
-            owner
-            dataRecency
-            sources {
-            tableId
-            tableName
-            columnId
-            columnName
-            __typename
-            }
-            synonyms
-            cohortAnswerId
-            __typename
-        }
-        relationships
-        destinationRelationships
-        dataSourceId
-        __typename
-        }
-    }  
-`;
-const sourceDetailCache = new Map();
-/**
- *
- * @param thoughtSpotHost
- * @param sourceId
- */
-async function getSourceDetail(thoughtSpotHost, sourceId) {
-    if (sourceDetailCache.get(sourceId)) {
-        return sourceDetailCache.get(sourceId);
-    }
-    const details = await graphqlQuery({
-        query: getSourceDetailQuery,
-        variables: {
-            ids: [sourceId],
-        },
-        thoughtSpotHost,
-    });
-    const souceDetails = details[0];
-    if (souceDetails) {
-        sourceDetailCache.set(sourceId, souceDetails);
-    }
-    return souceDetails;
-}
-
-const bachSessionId = `
-id {
-    sessionId
-    genNo
-    acSession {
-        sessionId
-        genNo
-    }
-}
-`;
-const getUnaggregatedAnswerSession = `
-mutation GetUnAggregatedAnswerSession($session: BachSessionIdInput!, $columns: [UserPointSelectionInput!]!) {
-    Answer__getUnaggregatedAnswer(session: $session, columns: $columns) {
-        ${bachSessionId}
-        answer {
-            visualizations {
-                ... on TableViz {
-                    columns {
-                        column {
-                            id
-                            name
-                            referencedColumns {
-                                guid
-                                displayName
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}  
-`;
-const removeColumns = `
-mutation RemoveColumns($session: BachSessionIdInput!, $logicalColumnIds: [GUID!], $columnIds: [GUID!]) {
-    Answer__removeColumns(
-        session: $session
-        logicalColumnIds: $logicalColumnIds
-        columnIds: $columnIds
-        ) {
-            ${bachSessionId}
-    }
-}
-    `;
-const addColumns = `
-    mutation AddColumns($session: BachSessionIdInput!, $columns: [AnswerColumnInfo!]!) {
-        Answer__addColumn(session: $session, columns: $columns) {
-            ${bachSessionId}
-        }
-    }
-    `;
-const getAnswerData = `
-    query GetTableWithHeadlineData($session: BachSessionIdInput!, $deadline: Int!, $dataPaginationParams: DataPaginationParamsInput!) {
-        getAnswer(session: $session) {
-            ${bachSessionId}
-            answer {
-                id
-                visualizations {
-                    id
-                    ... on TableViz {
-                        columns {
-                            column {
-                                id
-                                name
-                                type
-                                aggregationType
-                                dataType
-                            }
-                        }
-                        data(deadline: $deadline, pagination: $dataPaginationParams)
-                    }          
-                }
-            }
-        }
-    }
-`;
-
-// eslint-disable-next-line no-shadow
-var OperationType;
-(function (OperationType) {
-    OperationType["GetChartWithData"] = "GetChartWithData";
-    OperationType["GetTableWithHeadlineData"] = "GetTableWithHeadlineData";
-})(OperationType || (OperationType = {}));
-/**
- * Class representing the answer service provided with the
- * custom action payload. This service could be used to run
- * graphql queries in the context of the answer on which the
- * custom action was triggered.
- *
- * @example
- * ```js
- *  embed.on(EmbedEvent.CustomAction, e => {
- *     const underlying = await e.answerService.getUnderlyingDataForPoint([
- *       'col name 1'
- *     ]);
- *     const data = await underlying.fetchData(0, 100);
- *  })
- * ```
- * @version SDK: 1.25.0| ThoughtSpot: 9.10.0.cl
- * @group Events
- */
-class AnswerService {
-    /**
-     * Should not need to be called directly.
-     *
-     * @param session
-     * @param answer
-     * @param thoughtSpotHost
-     * @param selectedPoints
-     */
-    constructor(session, answer, thoughtSpotHost, selectedPoints) {
-        this.session = session;
-        this.answer = answer;
-        this.thoughtSpotHost = thoughtSpotHost;
-        this.selectedPoints = selectedPoints;
-        this.session = removeTypename(session);
-    }
-    /**
-     * Get the details about the source used in the answer.
-     * This can be used to get the list of all columns in the data source for example.
-     */
-    async getSourceDetail() {
-        const sourceId = this.answer.sources[0].header.guid;
-        return getSourceDetail(this.thoughtSpotHost, sourceId);
-    }
-    /**
-     * Remove columnIds and return updated answer session.
-     *
-     * @param columnIds
-     * @returns
-     */
-    async removeColumns(columnIds) {
-        return this.executeQuery(removeColumns, {
-            logicalColumnIds: columnIds,
-        });
-    }
-    /**
-     * Add columnIds and return updated answer session.
-     *
-     * @param columnIds
-     * @returns
-     */
-    async addColumns(columnIds) {
-        return this.executeQuery(addColumns, {
-            columns: columnIds.map((colId) => ({ logicalColumnId: colId })),
-        });
-    }
-    /**
-     * Fetch data from the answer.
-     *
-     * @param offset
-     * @param size
-     * @returns
-     */
-    async fetchData(offset = 0, size = 1000) {
-        const { answer } = await this.executeQuery(getAnswerData, {
-            deadline: 0,
-            dataPaginationParams: {
-                isClientPaginated: true,
-                offset,
-                size,
-            },
-        });
-        const { columns, data } = answer.visualizations.find((viz) => !!viz.data) || {};
-        return {
-            columns,
-            data,
-        };
-    }
-    /**
-     * Fetch the data for the answer as a CSV blob. This might be
-     * quicker for larger data.
-     *
-     * @param userLocale
-     * @param includeInfo Include the CSV header in the output
-     * @returns Response
-     */
-    async fetchCSVBlob(userLocale = 'en-us', includeInfo = false) {
-        const fetchUrl = this.getFetchCSVBlobUrl(userLocale, includeInfo);
-        return tokenizedFetch(fetchUrl, {
-            credentials: 'include',
-        });
-    }
-    /**
-     * Just get the internal URL for this answer's data
-     * as a CSV blob.
-     *
-     * @param userLocale
-     * @param includeInfo
-     * @returns
-     */
-    getFetchCSVBlobUrl(userLocale = 'en-us', includeInfo = false) {
-        return `${this.thoughtSpotHost}/prism/download/answer/csv?sessionId=${this.session.sessionId}&genNo=${this.session.genNo}&userLocale=${userLocale}&exportFileName=data&hideCsvHeader=${!includeInfo}`;
-    }
-    /**
-     * Get underlying data given a point and the output column names.
-     * In case of a context menu action, the selectedPoints are
-     * automatically passed.
-     *
-     * @param outputColumnNames
-     * @param selectedPoints
-     * @example
-     * ```js
-     *  embed.on(EmbedEvent.CustomAction, e => {
-     *     const underlying = await e.answerService.getUnderlyingDataForPoint([
-     *       'col name 1' // The column should exist in the data source.
-     *     ]);
-     *     const data = await underlying.fetchData(0, 100);
-     *  })
-     * ```
-     * @version SDK: 1.25.0| ThoughtSpot: 9.10.0.cl
-     */
-    async getUnderlyingDataForPoint(outputColumnNames, selectedPoints) {
-        if (!selectedPoints && !this.selectedPoints) {
-            throw new Error('Needs to be triggered in context of a point');
-        }
-        if (!selectedPoints) {
-            selectedPoints = getSelectedPointsForUnderlyingDataQuery(this.selectedPoints);
-        }
-        const sourceDetail = await this.getSourceDetail();
-        const ouputColumnGuids = getGuidsFromColumnNames(sourceDetail, outputColumnNames);
-        const unAggAnswer = await graphqlQuery({
-            query: getUnaggregatedAnswerSession,
-            variables: {
-                session: this.session,
-                columns: selectedPoints,
-            },
-            thoughtSpotHost: this.thoughtSpotHost,
-        });
-        const unaggAnswerSession = new AnswerService(unAggAnswer.id, unAggAnswer.answer, this.thoughtSpotHost);
-        const currentColumns = new Set(unAggAnswer.answer.visualizations[0].columns
-            .map((c) => c.column.referencedColumns[0].guid));
-        const columnsToAdd = [...ouputColumnGuids].filter((col) => !currentColumns.has(col));
-        if (columnsToAdd.length) {
-            await unaggAnswerSession.addColumns(columnsToAdd);
-        }
-        const columnsToRemove = [...currentColumns].filter((col) => !ouputColumnGuids.has(col));
-        if (columnsToRemove.length) {
-            await unaggAnswerSession.removeColumns(columnsToRemove);
-        }
-        return unaggAnswerSession;
-    }
-    /**
-     * Execute a custom graphql query in the context of the answer.
-     *
-     * @param query graphql query
-     * @param variables graphql variables
-     * @returns
-     */
-    async executeQuery(query, variables) {
-        const data = await graphqlQuery({
-            query,
-            variables: {
-                session: this.session,
-                ...variables,
-            },
-            thoughtSpotHost: this.thoughtSpotHost,
-            isCompositeQuery: false,
-        });
-        this.session = deepMerge(this.session, (data === null || data === void 0 ? void 0 : data.id) || {});
-        return data;
-    }
-    /**
-     * Get the internal session details for the answer.
-     *
-     * @returns
-     */
-    getSession() {
-        return this.session;
-    }
-}
-/**
- *
- * @param sourceDetail
- * @param colNames
- */
-function getGuidsFromColumnNames(sourceDetail, colNames) {
-    const cols = sourceDetail.columns.reduce((colSet, col) => {
-        colSet[col.name] = col;
-        return colSet;
-    }, {});
-    return new Set(colNames.map((colName) => {
-        const col = cols[colName];
-        return col.id;
-    }));
-}
-/**
- *
- * @param selectedPoints
- */
-function getSelectedPointsForUnderlyingDataQuery(selectedPoints) {
-    const underlyingDataPoint = [];
-    /**
-     *
-     * @param colVal
-     */
-    function addPointFromColVal(colVal) {
-        var _a;
-        const dataType = colVal.column.dataType;
-        const id = colVal.column.id;
-        let dataValue;
-        if (dataType === 'DATE') {
-            if (Number.isFinite(colVal.value)) {
-                dataValue = [{
-                        epochRange: {
-                            startEpoch: colVal.value,
-                        },
-                    }];
-                // Case for custom calendar.
-            }
-            else if ((_a = colVal.value) === null || _a === void 0 ? void 0 : _a.v) {
-                dataValue = [{
-                        epochRange: {
-                            startEpoch: colVal.value.v.s,
-                            endEpoch: colVal.value.v.e,
-                        },
-                    }];
-            }
-        }
-        else {
-            dataValue = [{ value: colVal.value }];
-        }
-        underlyingDataPoint.push({
-            columnId: colVal.column.id,
-            dataValue,
-        });
-    }
-    selectedPoints.forEach((p) => {
-        p.selectedAttributes.forEach(addPointFromColVal);
-    });
-    return underlyingDataPoint;
 }
 
 var eventemitter3 = createCommonjsModule(function (module) {
@@ -13360,229 +13192,559 @@ EventEmitter.EventEmitter = EventEmitter;
 }
 });
 
+var ReportType;
+(function (ReportType) {
+    ReportType["CSP_VIOLATION"] = "csp-violation";
+    ReportType["DEPRECATION"] = "deprecation";
+    ReportType["INTERVENTION"] = "intervention";
+})(ReportType || (ReportType = {}));
+let globalObserver = null;
 /**
- * The base implementation of `_.findIndex` and `_.findLastIndex` without
- * support for iteratee shorthands.
- *
- * @private
- * @param {Array} array The array to inspect.
- * @param {Function} predicate The function invoked per iteration.
- * @param {number} fromIndex The index to search from.
- * @param {boolean} [fromRight] Specify iterating from right to left.
- * @returns {number} Returns the index of the matched value, else `-1`.
+ * Register a global ReportingObserver to capture all unhandled errors
+ * @param overrideExisting boolean to override existing observer
+ * @returns ReportingObserver | null
  */
-function baseFindIndex(array, predicate, fromIndex, fromRight) {
-  var length = array.length,
-      index = fromIndex + (fromRight ? 1 : -1);
-
-  while ((fromRight ? index-- : ++index < length)) {
-    if (predicate(array[index], index, array)) {
-      return index;
+function registerReportingObserver(overrideExisting = false) {
+    if (!(window.ReportingObserver)) {
+        logger.warn(ERROR_MESSAGE.MISSING_REPORTING_OBSERVER);
+        return null;
     }
-  }
-  return -1;
-}
-
-var _baseFindIndex = baseFindIndex;
-
-/**
- * The base implementation of `_.isNaN` without support for number objects.
- *
- * @private
- * @param {*} value The value to check.
- * @returns {boolean} Returns `true` if `value` is `NaN`, else `false`.
- */
-function baseIsNaN(value) {
-  return value !== value;
-}
-
-var _baseIsNaN = baseIsNaN;
-
-/**
- * A specialized version of `_.indexOf` which performs strict equality
- * comparisons of values, i.e. `===`.
- *
- * @private
- * @param {Array} array The array to inspect.
- * @param {*} value The value to search for.
- * @param {number} fromIndex The index to search from.
- * @returns {number} Returns the index of the matched value, else `-1`.
- */
-function strictIndexOf(array, value, fromIndex) {
-  var index = fromIndex - 1,
-      length = array.length;
-
-  while (++index < length) {
-    if (array[index] === value) {
-      return index;
+    if (overrideExisting) {
+        resetGlobalReportingObserver();
     }
-  }
-  return -1;
-}
-
-var _strictIndexOf = strictIndexOf;
-
-/**
- * The base implementation of `_.indexOf` without `fromIndex` bounds checks.
- *
- * @private
- * @param {Array} array The array to inspect.
- * @param {*} value The value to search for.
- * @param {number} fromIndex The index to search from.
- * @returns {number} Returns the index of the matched value, else `-1`.
- */
-function baseIndexOf(array, value, fromIndex) {
-  return value === value
-    ? _strictIndexOf(array, value, fromIndex)
-    : _baseFindIndex(array, _baseIsNaN, fromIndex);
-}
-
-var _baseIndexOf = baseIndexOf;
-
-/**
- * A specialized version of `_.includes` for arrays without support for
- * specifying an index to search from.
- *
- * @private
- * @param {Array} [array] The array to inspect.
- * @param {*} target The value to search for.
- * @returns {boolean} Returns `true` if `target` is found, else `false`.
- */
-function arrayIncludes(array, value) {
-  var length = array == null ? 0 : array.length;
-  return !!length && _baseIndexOf(array, value, 0) > -1;
-}
-
-var _arrayIncludes = arrayIncludes;
-
-/**
- * This function is like `arrayIncludes` except that it accepts a comparator.
- *
- * @private
- * @param {Array} [array] The array to inspect.
- * @param {*} target The value to search for.
- * @param {Function} comparator The comparator invoked per element.
- * @returns {boolean} Returns `true` if `target` is found, else `false`.
- */
-function arrayIncludesWith(array, value, comparator) {
-  var index = -1,
-      length = array == null ? 0 : array.length;
-
-  while (++index < length) {
-    if (comparator(value, array[index])) {
-      return true;
+    if (globalObserver) {
+        return globalObserver;
     }
-  }
-  return false;
+    const embedConfig = getEmbedConfig();
+    globalObserver = new ReportingObserver((reports) => {
+        reports.forEach((report) => {
+            const { type, url, body } = report;
+            const reportBody = body;
+            const isThoughtSpotHost = url
+                && url.startsWith(embedConfig.thoughtSpotHost);
+            const isFrameHostError = type === ReportType.CSP_VIOLATION
+                && reportBody.effectiveDirective === 'frame-ancestors';
+            if (isThoughtSpotHost && isFrameHostError) {
+                if (!embedConfig.suppressErrorAlerts) {
+                    alert(ERROR_MESSAGE.CSP_VIOLATION_ALERT);
+                }
+                logger.error(ERROR_MESSAGE.CSP_FRAME_HOST_VIOLATION_LOG_MESSAGE);
+            }
+        });
+    }, { buffered: true });
+    globalObserver.observe();
+    return globalObserver;
+}
+/**
+ * Resets the global ReportingObserver
+ */
+function resetGlobalReportingObserver() {
+    if (globalObserver)
+        globalObserver.disconnect();
+    globalObserver = null;
 }
 
-var _arrayIncludesWith = arrayIncludesWith;
-
-/** Used as references for various `Number` constants. */
-var INFINITY = 1 / 0;
-
 /**
- * Creates a set object of `values`.
  *
- * @private
- * @param {Array} values The values to add to the set.
- * @returns {Object} Returns the new set.
+ * @param url
+ * @param options
  */
-var createSet = !(_Set && (1 / _setToArray(new _Set([,-0]))[1]) == INFINITY) ? noop_1 : function(values) {
-  return new _Set(values);
+function tokenizedFailureLoggedFetch(url, options = {}) {
+    return tokenizedFetch(url, options).then(async (r) => {
+        var _a;
+        if (!r.ok && r.type !== 'opaqueredirect' && r.type !== 'opaque') {
+            logger.error(`Failed to fetch ${url}`, await ((_a = r.text) === null || _a === void 0 ? void 0 : _a.call(r)));
+        }
+        return r;
+    });
+}
+/**
+ * Fetches the session info from the ThoughtSpot server.
+ *
+ * @param thoughtspotHost
+ * @returns {Promise<any>}
+ * @example
+ * ```js
+ *  const response = await sessionInfoService();
+ * ```
+ */
+async function fetchSessionInfoService(thoughtspotHost) {
+    const sessionInfoPath = `${thoughtspotHost}${EndPoints.SESSION_INFO}`;
+    const response = await tokenizedFailureLoggedFetch(sessionInfoPath);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch session info: ${response.statusText}`);
+    }
+    const data = await response.json();
+    return data;
+}
+/**
+ *
+ * @param thoughtSpotHost
+ */
+async function fetchLogoutService(thoughtSpotHost) {
+    return tokenizedFailureLoggedFetch(`${thoughtSpotHost}${EndPoints.LOGOUT}`, {
+        credentials: 'include',
+        method: 'POST',
+        headers: {
+            'x-requested-by': 'ThoughtSpot',
+        },
+    });
+}
+/**
+ * Is active service to check if the user is logged in.
+ *
+ * @param thoughtSpotHost
+ * @version SDK: 1.28.4 | ThoughtSpot: *
+ */
+async function isActiveService(thoughtSpotHost) {
+    const isActiveUrl = `${thoughtSpotHost}${EndPoints.IS_ACTIVE}`;
+    try {
+        const res = await tokenizedFetch(isActiveUrl, {
+            credentials: 'include',
+        });
+        return res.ok;
+    }
+    catch (e) {
+        logger.warn(`Is Logged In Service failed : ${e.message}`);
+    }
+    return false;
+}
+
+let sessionInfo = null;
+/**
+ * Returns the session info object and caches it for future use.
+ * Once fetched the session info object is cached and returned from the cache on
+ * subsequent calls.
+ *
+ * @example ```js
+ * const sessionInfo = await getSessionInfo();
+ * console.log(sessionInfo);
+ * ```
+ * @version SDK: 1.28.3 | ThoughtSpot: *
+ * @returns {Promise<SessionInfo>} The session info object.
+ */
+async function getSessionInfo() {
+    if (!sessionInfo) {
+        const host = getEmbedConfig().thoughtSpotHost;
+        const sessionResponse = await fetchSessionInfoService(host);
+        const processedSessionInfo = getSessionDetails(sessionResponse);
+        sessionInfo = processedSessionInfo;
+    }
+    return sessionInfo;
+}
+/**
+ * Processes the session info response and returns the session info object.
+ *
+ *  @param sessionInfoResp {any} Response from the session info API.
+ *  @returns {SessionInfo} The session info object.
+ *  @example ```js
+ *  const sessionInfoResp = await fetch(sessionInfoPath);
+ *  const sessionInfo = getSessionDetails(sessionInfoResp);
+ *  console.log(sessionInfo);
+ *  ```
+ * @version SDK: 1.28.3 | ThoughtSpot: *
+ */
+const getSessionDetails = (sessionInfoResp) => {
+    const devMixpanelToken = sessionInfoResp.configInfo.mixpanelConfig.devSdkKey;
+    const prodMixpanelToken = sessionInfoResp.configInfo.mixpanelConfig.prodSdkKey;
+    const mixpanelToken = sessionInfoResp.configInfo.mixpanelConfig.production
+        ? prodMixpanelToken
+        : devMixpanelToken;
+    return {
+        userGUID: sessionInfoResp.userGUID,
+        mixpanelToken,
+        isPublicUser: sessionInfoResp.configInfo.isPublicUser,
+        releaseVersion: sessionInfoResp.releaseVersion,
+        clusterId: sessionInfoResp.configInfo.selfClusterId,
+        clusterName: sessionInfoResp.configInfo.selfClusterName,
+        ...sessionInfoResp,
+    };
 };
 
-var _createSet = createSet;
-
-/** Used as the size to enable large array optimizations. */
-var LARGE_ARRAY_SIZE$1 = 200;
-
+// eslint-disable-next-line import/no-mutable-exports
+let loggedInStatus = false;
+// eslint-disable-next-line import/no-mutable-exports
+let samlAuthWindow = null;
+// eslint-disable-next-line import/no-mutable-exports
+let samlCompletionPromise = null;
+let releaseVersion = '';
+const SSO_REDIRECTION_MARKER_GUID = '5e16222e-ef02-43e9-9fbd-24226bf3ce5b';
 /**
- * The base implementation of `_.uniqBy` without support for iteratee shorthands.
- *
- * @private
- * @param {Array} array The array to inspect.
- * @param {Function} [iteratee] The iteratee invoked per element.
- * @param {Function} [comparator] The comparator invoked per element.
- * @returns {Array} Returns the new duplicate free array.
+ * Enum for auth failure types. This is the parameter passed to the listner
+ * of {@link AuthStatus.FAILURE}.
+ * @group Authentication / Init
  */
-function baseUniq(array, iteratee, comparator) {
-  var index = -1,
-      includes = _arrayIncludes,
-      length = array.length,
-      isCommon = true,
-      result = [],
-      seen = result;
-
-  if (comparator) {
-    isCommon = false;
-    includes = _arrayIncludesWith;
-  }
-  else if (length >= LARGE_ARRAY_SIZE$1) {
-    var set = iteratee ? null : _createSet(array);
-    if (set) {
-      return _setToArray(set);
-    }
-    isCommon = false;
-    includes = _cacheHas;
-    seen = new _SetCache;
-  }
-  else {
-    seen = iteratee ? [] : result;
-  }
-  outer:
-  while (++index < length) {
-    var value = array[index],
-        computed = iteratee ? iteratee(value) : value;
-
-    value = (comparator || value !== 0) ? value : 0;
-    if (isCommon && computed === computed) {
-      var seenIndex = seen.length;
-      while (seenIndex--) {
-        if (seen[seenIndex] === computed) {
-          continue outer;
-        }
-      }
-      if (iteratee) {
-        seen.push(computed);
-      }
-      result.push(value);
-    }
-    else if (!includes(seen, computed, comparator)) {
-      if (seen !== result) {
-        seen.push(computed);
-      }
-      result.push(value);
-    }
-  }
-  return result;
-}
-
-var _baseUniq = baseUniq;
-
+var AuthFailureType;
+(function (AuthFailureType) {
+    AuthFailureType["SDK"] = "SDK";
+    AuthFailureType["NO_COOKIE_ACCESS"] = "NO_COOKIE_ACCESS";
+    AuthFailureType["EXPIRY"] = "EXPIRY";
+    AuthFailureType["OTHER"] = "OTHER";
+})(AuthFailureType || (AuthFailureType = {}));
 /**
- * Creates a duplicate-free version of an array, using
- * [`SameValueZero`](http://ecma-international.org/ecma-262/7.0/#sec-samevaluezero)
- * for equality comparisons, in which only the first occurrence of each element
- * is kept. The order of result values is determined by the order they occur
- * in the array.
+ * Enum for auth status emitted by the emitter returned from {@link init}.
+ * @group Authentication / Init
+ */
+var AuthStatus;
+(function (AuthStatus) {
+    /**
+     * Emits when the SDK fails to authenticate
+     */
+    AuthStatus["FAILURE"] = "FAILURE";
+    /**
+     * Emits when the SDK authenticates successfully
+     */
+    AuthStatus["SDK_SUCCESS"] = "SDK_SUCCESS";
+    /**
+     * Emits when the app sends an authentication success message
+     */
+    AuthStatus["SUCCESS"] = "SUCCESS";
+    /**
+     * Emits when a user logs out
+     */
+    AuthStatus["LOGOUT"] = "LOGOUT";
+    /**
+     * Emitted when inPopup is true in the SAMLRedirect flow and the
+     * popup is waiting to be triggered either programmatically
+     * or by the trigger button.
+     * @version SDK: 1.19.0
+     */
+    AuthStatus["WAITING_FOR_POPUP"] = "WAITING_FOR_POPUP";
+})(AuthStatus || (AuthStatus = {}));
+/**
+ * Events which can be triggered on the emitter returned from {@link init}.
+ * @group Authentication / Init
+ */
+var AuthEvent;
+(function (AuthEvent) {
+    /**
+     * Manually trigger the SSO popup. This is useful when
+     * authStatus is SAMLRedirect/OIDCRedirect and inPopup is set to true
+     */
+    AuthEvent["TRIGGER_SSO_POPUP"] = "TRIGGER_SSO_POPUP";
+})(AuthEvent || (AuthEvent = {}));
+let authEE;
+/**
  *
- * @static
- * @memberOf _
- * @since 0.1.0
- * @category Array
- * @param {Array} array The array to inspect.
- * @returns {Array} Returns the new duplicate free array.
+ * @param eventEmitter
+ */
+function setAuthEE(eventEmitter) {
+    authEE = eventEmitter;
+}
+/**
+ *
+ */
+function notifyAuthSDKSuccess() {
+    if (!authEE) {
+        logger.error(ERROR_MESSAGE.SDK_NOT_INITIALIZED);
+        return;
+    }
+    authEE.emit(AuthStatus.SDK_SUCCESS);
+}
+/**
+ *
+ */
+async function notifyAuthSuccess() {
+    if (!authEE) {
+        logger.error(ERROR_MESSAGE.SDK_NOT_INITIALIZED);
+        return;
+    }
+    try {
+        const sessionInfo = await getSessionInfo();
+        authEE.emit(AuthStatus.SUCCESS, sessionInfo);
+    }
+    catch (e) {
+        logger.error(ERROR_MESSAGE.SESSION_INFO_FAILED);
+    }
+}
+/**
+ *
+ * @param failureType
+ */
+function notifyAuthFailure(failureType) {
+    if (!authEE) {
+        logger.error(ERROR_MESSAGE.SDK_NOT_INITIALIZED);
+        return;
+    }
+    authEE.emit(AuthStatus.FAILURE, failureType);
+}
+/**
+ *
+ */
+function notifyLogout() {
+    if (!authEE) {
+        logger.error(ERROR_MESSAGE.SDK_NOT_INITIALIZED);
+        return;
+    }
+    authEE.emit(AuthStatus.LOGOUT);
+}
+/**
+ * Check if we are logged into the ThoughtSpot cluster
+ * @param thoughtSpotHost The ThoughtSpot cluster hostname or IP
+ */
+async function isLoggedIn(thoughtSpotHost) {
+    try {
+        const response = await isActiveService(thoughtSpotHost);
+        return response;
+    }
+    catch (e) {
+        return false;
+    }
+}
+/**
+ * Services to be called after the login is successful,
+ * This should be called after the cookie is set for cookie auth or
+ * after the token is set for cookieless.
+ *
+ * @return {Promise<void>}
  * @example
- *
- * _.uniq([2, 1, 2]);
- * // => [2, 1]
+ * ```js
+ * await postLoginService();
+ * ```
+ * @version SDK: 1.28.3 | ThoughtSpot: *
  */
-function uniq(array) {
-  return (array && array.length) ? _baseUniq(array) : [];
+async function postLoginService() {
+    try {
+        const sessionInfo = await getSessionInfo();
+        releaseVersion = sessionInfo.releaseVersion;
+        const embedConfig = getEmbedConfig();
+        if (!embedConfig.disableSDKTracking) {
+            initMixpanel(sessionInfo);
+        }
+    }
+    catch (e) {
+        logger.error('Post login services failed.', e.message);
+    }
 }
-
-var uniq_1 = uniq;
+/**
+ * Return releaseVersion if available
+ */
+function getReleaseVersion() {
+    return releaseVersion;
+}
+/**
+ * Check if we are stuck at the SSO redirect URL
+ */
+function isAtSSORedirectUrl() {
+    return window.location.href.indexOf(SSO_REDIRECTION_MARKER_GUID) >= 0;
+}
+/**
+ * Remove the SSO redirect URL marker
+ */
+function removeSSORedirectUrlMarker() {
+    // Note (sunny): This will leave a # around even if it was not in the URL
+    // to begin with. Trying to remove the hash by changing window.location will
+    // reload the page which we don't want. We'll live with adding an
+    // unnecessary hash to the parent page URL until we find any use case where
+    // that creates an issue.
+    window.location.hash = window.location.hash.replace(SSO_REDIRECTION_MARKER_GUID, '');
+}
+/**
+ * Perform token based authentication
+ * @param embedConfig The embed configuration
+ */
+const doTokenAuth = async (embedConfig) => {
+    const { thoughtSpotHost, username, authEndpoint, getAuthToken, } = embedConfig;
+    if (!authEndpoint && !getAuthToken) {
+        throw new Error('Either auth endpoint or getAuthToken function must be provided');
+    }
+    loggedInStatus = await isLoggedIn(thoughtSpotHost);
+    if (!loggedInStatus) {
+        let authToken;
+        try {
+            authToken = await getAuthenticationToken(embedConfig);
+        }
+        catch (e) {
+            loggedInStatus = false;
+            throw e;
+        }
+        let resp;
+        try {
+            resp = await fetchAuthPostService(thoughtSpotHost, username, authToken);
+        }
+        catch (e) {
+            resp = await fetchAuthService(thoughtSpotHost, username, authToken);
+        }
+        // token login issues a 302 when successful
+        loggedInStatus = resp.ok || resp.type === 'opaqueredirect';
+        if (loggedInStatus && embedConfig.detectCookieAccessSlow) {
+            // When 3rd party cookie access is blocked, this will fail because
+            // cookies will not be sent with the call.
+            loggedInStatus = await isLoggedIn(thoughtSpotHost);
+        }
+    }
+    return loggedInStatus;
+};
+/**
+ * Validate embedConfig parameters required for cookielessTokenAuth
+ * @param embedConfig The embed configuration
+ */
+const doCookielessTokenAuth = async (embedConfig) => {
+    const { authEndpoint, getAuthToken } = embedConfig;
+    if (!authEndpoint && !getAuthToken) {
+        throw new Error('Either auth endpoint or getAuthToken function must be provided');
+    }
+    let authSuccess = false;
+    try {
+        const authToken = await getAuthenticationToken(embedConfig);
+        if (authToken) {
+            authSuccess = true;
+        }
+    }
+    catch {
+        authSuccess = false;
+    }
+    return authSuccess;
+};
+/**
+ * Perform basic authentication to the ThoughtSpot cluster using the cluster
+ * credentials.
+ *
+ * Warning: This feature is primarily intended for developer testing. It is
+ * strongly advised not to use this authentication method in production.
+ * @param embedConfig The embed configuration
+ */
+const doBasicAuth = async (embedConfig) => {
+    const { thoughtSpotHost, username, password } = embedConfig;
+    const loggedIn = await isLoggedIn(thoughtSpotHost);
+    if (!loggedIn) {
+        const response = await fetchBasicAuthService(thoughtSpotHost, username, password);
+        loggedInStatus = response.ok;
+        if (embedConfig.detectCookieAccessSlow) {
+            loggedInStatus = await isLoggedIn(thoughtSpotHost);
+        }
+    }
+    else {
+        loggedInStatus = true;
+    }
+    return loggedInStatus;
+};
+/**
+ *
+ * @param ssoURL
+ * @param triggerContainer
+ * @param triggerText
+ */
+async function samlPopupFlow(ssoURL, triggerContainer, triggerText) {
+    const openPopup = () => {
+        if (samlAuthWindow === null || samlAuthWindow.closed) {
+            samlAuthWindow = window.open(ssoURL, '_blank', 'location=no,height=570,width=520,scrollbars=yes,status=yes');
+        }
+        else {
+            samlAuthWindow.focus();
+        }
+    };
+    authEE === null || authEE === void 0 ? void 0 : authEE.emit(AuthStatus.WAITING_FOR_POPUP);
+    const containerEl = getDOMNode(triggerContainer);
+    if (containerEl) {
+        containerEl.innerHTML = '<button id="ts-auth-btn" class="ts-auth-btn" style="margin: auto;"></button>';
+        const authElem = document.getElementById('ts-auth-btn');
+        authElem.textContent = triggerText;
+        authElem.addEventListener('click', openPopup, { once: true });
+    }
+    samlCompletionPromise = samlCompletionPromise || new Promise((resolve, reject) => {
+        window.addEventListener('message', (e) => {
+            if (e.data.type === EmbedEvent.SAMLComplete) {
+                e.source.close();
+                resolve();
+            }
+        });
+    });
+    authEE === null || authEE === void 0 ? void 0 : authEE.once(AuthEvent.TRIGGER_SSO_POPUP, openPopup);
+    return samlCompletionPromise;
+}
+/**
+ * Perform SAML authentication
+ * @param embedConfig The embed configuration
+ * @param ssoEndPoint
+ */
+const doSSOAuth = async (embedConfig, ssoEndPoint) => {
+    const { thoughtSpotHost } = embedConfig;
+    const loggedIn = await isLoggedIn(thoughtSpotHost);
+    if (loggedIn) {
+        if (isAtSSORedirectUrl()) {
+            removeSSORedirectUrlMarker();
+        }
+        loggedInStatus = true;
+        return;
+    }
+    // we have already tried authentication and it did not succeed, restore
+    // the current URL to the original one and invoke the callback.
+    if (isAtSSORedirectUrl()) {
+        removeSSORedirectUrlMarker();
+        loggedInStatus = false;
+        return;
+    }
+    const ssoURL = `${thoughtSpotHost}${ssoEndPoint}`;
+    if (embedConfig.inPopup) {
+        await samlPopupFlow(ssoURL, embedConfig.authTriggerContainer, embedConfig.authTriggerText);
+        loggedInStatus = await isLoggedIn(thoughtSpotHost);
+        return;
+    }
+    window.location.href = ssoURL;
+};
+const doSamlAuth = async (embedConfig) => {
+    const { thoughtSpotHost } = embedConfig;
+    // redirect for SSO, when the SSO authentication is done, this page will be
+    // loaded again and the same JS will execute again.
+    const ssoRedirectUrl = embedConfig.inPopup
+        ? `${thoughtSpotHost}/v2/#/embed/saml-complete`
+        : getRedirectUrl(window.location.href, SSO_REDIRECTION_MARKER_GUID, embedConfig.redirectPath);
+    // bring back the page to the same URL
+    const ssoEndPoint = `${EndPoints.SAML_LOGIN_TEMPLATE(encodeURIComponent(ssoRedirectUrl))}`;
+    await doSSOAuth(embedConfig, ssoEndPoint);
+    return loggedInStatus;
+};
+const doOIDCAuth = async (embedConfig) => {
+    const { thoughtSpotHost } = embedConfig;
+    // redirect for SSO, when the SSO authentication is done, this page will be
+    // loaded again and the same JS will execute again.
+    const ssoRedirectUrl = embedConfig.noRedirect || embedConfig.inPopup
+        ? `${thoughtSpotHost}/v2/#/embed/saml-complete`
+        : getRedirectUrl(window.location.href, SSO_REDIRECTION_MARKER_GUID, embedConfig.redirectPath);
+    // bring back the page to the same URL
+    const ssoEndPoint = `${EndPoints.OIDC_LOGIN_TEMPLATE(encodeURIComponent(ssoRedirectUrl))}`;
+    await doSSOAuth(embedConfig, ssoEndPoint);
+    return loggedInStatus;
+};
+const logout = async (embedConfig) => {
+    const { thoughtSpotHost } = embedConfig;
+    await fetchLogoutService(thoughtSpotHost);
+    resetCachedAuthToken();
+    const thoughtspotIframes = document.querySelectorAll("[data-ts-iframe='true']");
+    if (thoughtspotIframes === null || thoughtspotIframes === void 0 ? void 0 : thoughtspotIframes.length) {
+        thoughtspotIframes.forEach((el) => {
+            el.parentElement.innerHTML = embedConfig.loginFailedMessage;
+        });
+    }
+    loggedInStatus = false;
+    return loggedInStatus;
+};
+/**
+ * Perform authentication on the ThoughtSpot cluster
+ * @param embedConfig The embed configuration
+ */
+const authenticate = async (embedConfig) => {
+    const { authType } = embedConfig;
+    switch (authType) {
+        case AuthType.SSO:
+        case AuthType.SAMLRedirect:
+        case AuthType.SAML:
+            return doSamlAuth(embedConfig);
+        case AuthType.OIDC:
+        case AuthType.OIDCRedirect:
+            return doOIDCAuth(embedConfig);
+        case AuthType.AuthServer:
+        case AuthType.TrustedAuthToken:
+            return doTokenAuth(embedConfig);
+        case AuthType.TrustedAuthTokenCookieless:
+            return doCookielessTokenAuth(embedConfig);
+        case AuthType.Basic:
+            return doBasicAuth(embedConfig);
+        default:
+            return Promise.resolve(true);
+    }
+};
 
 /* eslint-disable camelcase */
 const CONFIG_DEFAULTS = {
@@ -13603,6 +13765,8 @@ const handleAuth = () => {
             notifyAuthFailure(AuthFailureType.SDK);
         }
         else {
+            // Post login service is called after successful login.
+            postLoginService();
             notifyAuthSDKSuccess();
         }
     }, () => {
@@ -13620,7 +13784,6 @@ const hostUrlToFeatureUrl = {
  * Prefetches static resources from the specified URL. Web browsers can then cache the
  * prefetched resources and serve them from the user's local disk to provide faster access
  * to your app.
- *
  * @param url The URL provided for prefetch
  * @param prefetchFeatures Specify features which needs to be prefetched.
  * @version SDK: 1.4.0 | ThoughtSpot: ts7.sep.cl, 7.2.1
@@ -13635,7 +13798,9 @@ const prefetch = (url, prefetchFeatures) => {
         const features = prefetchFeatures || [PrefetchFeatures.FullApp];
         let hostUrl = url || getEmbedConfig().thoughtSpotHost;
         hostUrl = hostUrl[hostUrl.length - 1] === '/' ? hostUrl : `${hostUrl}/`;
-        uniq_1(features.map((feature) => hostUrlToFeatureUrl[feature](hostUrl))).forEach((prefetchUrl, index) => {
+        Array.from(new Set(features
+            .map((feature) => hostUrlToFeatureUrl[feature](hostUrl))))
+            .forEach((prefetchUrl, index) => {
             const iFrame = document.createElement('iframe');
             iFrame.src = prefetchUrl;
             iFrame.style.width = '0';
@@ -13677,7 +13842,6 @@ function backwardCompat(embedConfig) {
  * authentication if applicable. This function needs to be called before any ThoughtSpot
  * component like liveboard etc can be embedded. But need not wait for AuthEvent.SUCCESS
  * to actually embed. That is handled internally.
- *
  * @param embedConfig The configuration object containing ThoughtSpot host,
  * authentication mechanism and so on.
  * @example
@@ -13696,12 +13860,14 @@ function backwardCompat(embedConfig) {
 const init = (embedConfig) => {
     var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
     sanity(embedConfig);
+    resetCachedAuthToken();
     embedConfig = setEmbedConfig(backwardCompat({
         ...CONFIG_DEFAULTS,
         ...embedConfig,
         thoughtSpotHost: getThoughtSpotHost(embedConfig),
     }));
     setGlobalLogLevelOverride(embedConfig.logLevel);
+    registerReportingObserver();
     const authEE = new eventemitter3();
     setAuthEE(authEE);
     handleAuth();
@@ -13731,7 +13897,6 @@ function disableAutoLogin() {
  *
  * You can call the `init` method again to re login, if autoLogin is set to
  * true in this second call it will be honored.
- *
  * @param doNotDisableAutoLogin This flag when passed will not disable autoLogin
  * @returns Promise which resolves when logout completes.
  * @version SDK: 1.10.1 | ThoughtSpot: 8.2.0.cl, 8.4.1-sw
@@ -13750,7 +13915,6 @@ let renderQueue = Promise.resolve();
 /**
  * Renders functions in a queue, resolves to next function only after the callback next
  * is called
- *
  * @param fn The function being registered
  */
 const renderInQueue = (fn) => {
@@ -13764,7 +13928,6 @@ const renderInQueue = (fn) => {
 };
 /**
  * Imports TML representation of the metadata objects into ThoughtSpot.
- *
  * @param data
  * @example
  * ```js
@@ -13821,7 +13984,6 @@ const executeTML = async (data) => {
 /**
  * Exports TML representation of the metadata objects from ThoughtSpot in JSON or YAML
  * format.
- *
  * @param data
  * @example
  * ```js
@@ -13890,20 +14052,20 @@ const exportTML = async (data) => {
  */
 function processCustomAction(e, thoughtSpotHost) {
     const { session, embedAnswerData, contextMenuPoints } = e.data;
-    const answerService = new AnswerService(session, embedAnswerData, thoughtSpotHost, contextMenuPoints === null || contextMenuPoints === void 0 ? void 0 : contextMenuPoints.selectedPoints);
+    const answerService = new AnswerService(session, embedAnswerData || {}, thoughtSpotHost, contextMenuPoints === null || contextMenuPoints === void 0 ? void 0 : contextMenuPoints.selectedPoints);
     return {
         ...e,
         answerService,
     };
 }
 /**
+ * Responds to AuthInit sent from host signifying successful authentication in host.
  *
  * @param e
+ * @returns {any}
  */
 function processAuthInit(e) {
     var _a, _b;
-    // Store user session details sent by app.
-    initSession(e.data);
     notifyAuthSuccess();
     // Expose only allowed details (eg: userGUID) back to SDK users.
     return {
@@ -13923,7 +14085,7 @@ function processNoCookieAccess(e, containerEl) {
     if (!ignoreNoCookieAccess) {
         if (!suppressNoCookieAccessAlert && !suppressErrorAlerts) {
             // eslint-disable-next-line no-alert
-            alert('Third party cookie access is blocked on this browser, please allow third party cookies for this to work properly. \nYou can use `suppressNoCookieAccessAlert` to suppress this message.');
+            alert(ERROR_MESSAGE.THIRD_PARTY_COOKIE_BLOCKED_ALERT);
         }
         // eslint-disable-next-line no-param-reassign
         containerEl.innerHTML = loginFailedMessage;
@@ -13985,7 +14147,6 @@ function processEventData(type, e, thoughtSpotHost, containerEl) {
 
 /**
  * Reloads the ThoughtSpot iframe.
- *
  * @param iFrame
  */
 const reload = (iFrame) => {
@@ -13997,7 +14158,6 @@ const reload = (iFrame) => {
 };
 /**
  * Post iframe message.
- *
  * @param iFrame
  * @param message
  * @param message.type
@@ -14041,11 +14201,12 @@ function processTrigger(iFrame, messageType, thoughtSpotHost, data) {
     });
 }
 
+var name="@thoughtspot/visual-embed-sdk";var version="1.32.1";var description="ThoughtSpot Embed SDK";var module="lib/src/index.js";var main="dist/tsembed.js";var types="lib/src/index.d.ts";var files=["dist/**","lib/**","src/**","cjs/**"];var exports={".":{"import":"./lib/src/index.js",require:"./cjs/src/index.js",types:"./lib/src/index.d.ts"},"./react":{"import":"./lib/src/react/all-types-export.js",require:"./cjs/src/react/all-types-export.js",types:"./lib/src/react/all-types-export.d.ts"},"./lib/src/react":{"import":"./lib/src/react/all-types-export.js",require:"./cjs/src/react/all-types-export.js",types:"./lib/src/react/all-types-export.d.ts"}};var typesVersions={"*":{react:["./lib/src/react/all-types-export.d.ts"]}};var scripts={lint:"eslint 'src/**'","lint:fix":"eslint 'src/**/*.*' --fix",tsc:"tsc -p . --incremental false; tsc -p . --incremental false --module commonjs --outDir cjs",start:"gatsby develop","build:gatsby":"npm run clean:gatsby && gatsby build --prefix-paths","build:gatsby:noprefix":"npm run clean:gatsby && gatsby build","serve:gatsby":"gatsby serve","clean:gatsby":"gatsby clean","build-and-publish":"npm run build:gatsby && npm run publish","bundle-dts-file":"dts-bundle --name @thoughtspot/visual-embed-sdk --out visual-embed-sdk.d.ts --main lib/src/index.d.ts","bundle-dts":"dts-bundle --name ../../dist/visual-embed-sdk --main lib/src/index.d.ts --outputAsModuleFolder=true","bundle-dts-react":"dts-bundle --name ../../../dist/visual-embed-sdk-react --main lib/src/react/index.d.ts --outputAsModuleFolder=true","bundle-dts-react-full":"dts-bundle --name ../../../dist/visual-embed-sdk-react-full --main lib/src/react/all-types-export.d.ts --outputAsModuleFolder=true",build:"rollup -c",watch:"rollup -cw","docs-cmd":"node scripts/gatsby-commands.js",docgen:"typedoc --tsconfig tsconfig.json --theme typedoc-theme","test-sdk":"jest -c jest.config.sdk.js --runInBand","test-docs":"jest -c jest.config.docs.js",test:"npm run test-sdk && npm run test-docs",posttest:"cat ./coverage/sdk/lcov.info | coveralls","is-publish-allowed":"node scripts/is-publish-allowed.js",prepublishOnly:"npm run is-publish-allowed && npm run test && npm run tsc && npm run bundle-dts-file && npm run bundle-dts && npm run bundle-dts-react && npm run bundle-dts-react-full && npm run build","check-size":"npm run build && size-limit","publish-dev":"npm publish --tag dev","publish-prod":"npm publish --tag latest",dev:"vite -c vite.local.config.ts"};var peerDependencies={react:"> 16.8.0","react-dom":"> 16.8.0"};var dependencies={algoliasearch:"^4.10.5",classnames:"^2.3.1",dompurify:"^2.3.4","eslint-plugin-comment-length":"^0.9.2","eslint-plugin-jsdoc":"^46.9.0",eventemitter3:"^4.0.7","gatsby-plugin-vercel":"^1.0.3","html-react-parser":"^1.4.12",lodash:"^4.17.21","mixpanel-browser":"^2.45.0","ts-deepmerge":"^6.0.2",tslib:"^2.5.3","use-deep-compare-effect":"^1.8.1"};var devDependencies={"@mdx-js/mdx":"^1.6.22","@mdx-js/react":"^1.6.22","@react-icons/all-files":"^4.1.0","@rollup/plugin-commonjs":"^18.0.0","@rollup/plugin-json":"^4.1.0","@rollup/plugin-node-resolve":"^11.2.1","@rollup/plugin-replace":"^5.0.2","@size-limit/preset-big-lib":"^8.2.6","@testing-library/dom":"^7.31.0","@testing-library/jest-dom":"^5.14.1","@testing-library/react":"^11.2.7","@testing-library/user-event":"^13.1.8","@types/jest":"^22.2.3","@types/mixpanel-browser":"^2.35.6","@types/react-test-renderer":"^17.0.1","@typescript-eslint/eslint-plugin":"^4.6.0","@typescript-eslint/parser":"^4.6.0",asciidoctor:"^2.2.1","babel-jest":"^26.6.3","babel-preset-gatsby":"^1.10.0","command-line-args":"^5.1.1",coveralls:"^3.1.0","current-git-branch":"^1.1.0","dts-bundle":"^0.7.3",eslint:"^7.12.1","eslint-config-airbnb-base":"^14.2.0","eslint-config-prettier":"^6.15.0","eslint-import-resolver-typescript":"^2.3.0","eslint-plugin-import":"^2.22.1","eslint-plugin-prettier":"^3.1.4","eslint-plugin-react-hooks":"^4.2.0","fs-extra":"^10.0.0",gatsby:"3.13.1","gatsby-plugin-algolia":"^0.22.2","gatsby-plugin-catch-links":"^3.1.0","gatsby-plugin-env-variables":"^2.1.0","gatsby-plugin-intl":"^0.3.3","gatsby-plugin-manifest":"^3.2.0","gatsby-plugin-output":"^0.1.3","gatsby-plugin-sass":"6.7.0","gatsby-plugin-sitemap":"^4.10.0","gatsby-source-filesystem":"3.1.0","gatsby-transformer-asciidoc":"2.1.0","gatsby-transformer-rehype":"2.0.0","gh-pages":"^3.1.0","highlight.js":"^10.6.0","html-to-text":"^8.0.0","identity-obj-proxy":"^3.0.0","istanbul-merge":"^1.1.1",jest:"^26.6.3","jest-fetch-mock":"^3.0.3",jsdom:"^17.0.0","node-sass":"^8.0.0",prettier:"2.1.2",react:"^16.14.0","react-dom":"^16.14.0","react-resizable":"^1.11.0","react-resize-detector":"^6.6.0","react-test-renderer":"^17.0.2","react-use-flexsearch":"^0.1.1",rollup:"2.30.0","rollup-plugin-typescript2":"0.27.3","ts-jest":"^26.5.5","ts-loader":"8.0.4",typedoc:"0.21.6","typedoc-plugin-toc-group":"thoughtspot/typedoc-plugin-toc-group",typescript:"^4.9.4","url-search-params-polyfill":"^8.1.0",util:"^0.12.4",vite:"^5.3.4"};var author="ThoughtSpot";var email="support@thoughtspot.com";var license="ThoughtSpot Development Tools End User License Agreement";var directories={lib:"lib"};var repository={type:"git",url:"git+https://github.com/thoughtspot/visual-embed-sdk.git"};var publishConfig={registry:"https://registry.npmjs.org"};var keywords=["thoughtspot","everywhere","embedded","embed","sdk","analytics"];var bugs={url:"https://github.com/thoughtspot/visual-embed-sdk/issues"};var homepage="https://github.com/thoughtspot/visual-embed-sdk#readme";var globals={window:{}};var pkgInfo = {name:name,version:version,description:description,module:module,main:main,types:types,files:files,exports:exports,typesVersions:typesVersions,"size-limit":[{path:"dist/tsembed.js",limit:"48 kB"}],scripts:scripts,peerDependencies:peerDependencies,dependencies:dependencies,devDependencies:devDependencies,author:author,email:email,license:license,directories:directories,repository:repository,publishConfig:publishConfig,keywords:keywords,bugs:bugs,homepage:homepage,globals:globals};
+
 /**
  * Copyright (c) 2022
  *
  * Base classes
- *
  * @summary Base classes
  * @author Ayon Ghosh <ayon.ghosh@thoughtspot.com>
  */
@@ -14059,7 +14220,6 @@ const TS_EMBED_ID = '_thoughtspot-embed';
  * The event id map from v2 event names to v1 event id
  * v1 events are the classic embed events implemented in Blink v1
  * We cannot rename v1 event types to maintain backward compatibility
- *
  * @internal
  */
 const V1EventMap = {};
@@ -14079,7 +14239,6 @@ class TsEmbed {
          * Should we encode URL Query Params using base64 encoding which thoughtspot
          * will generate for embedding. This provides additional security to
          * thoughtspot clusters against Cross site scripting attacks.
-         *
          * @default false
          */
         this.shouldEncodeUrlQueryParams = false;
@@ -14087,7 +14246,6 @@ class TsEmbed {
         this.subscribedListeners = {};
         /**
          * Send Custom style as part of payload of APP_INIT
-         *
          * @param _
          * @param responder
          */
@@ -14112,6 +14270,9 @@ class TsEmbed {
                     runtimeFilterParams: this.viewConfig.excludeRuntimeFiltersfromURL
                         ? getRuntimeFilters(this.viewConfig.runtimeFilters)
                         : null,
+                    runtimeParameterParams: this.viewConfig.excludeRuntimeParametersfromURL
+                        ? getRuntimeParameters(this.viewConfig.runtimeParameters || [])
+                        : null,
                     hiddenHomepageModules: this.viewConfig.hiddenHomepageModules || [],
                     reorderedHomepageModules: this.viewConfig.reorderedHomepageModules || [],
                     hostConfig: this.embedConfig.hostConfig,
@@ -14123,7 +14284,6 @@ class TsEmbed {
         };
         /**
          * Sends updated auth token to the iFrame to avoid user logout
-         *
          * @param _
          * @param responder
          */
@@ -14139,6 +14299,7 @@ class TsEmbed {
                     });
                 }
                 catch (e) {
+                    logger.error(`${ERROR_MESSAGE.INVALID_TOKEN_ERROR} Error : ${e === null || e === void 0 ? void 0 : e.message}`);
                     processAuthFailure(e, this.isPreRendered ? this.preRenderWrapper : this.el);
                 }
             }
@@ -14186,7 +14347,11 @@ class TsEmbed {
         this.thoughtSpotV2Base = getV2BasePath(this.embedConfig);
         this.eventHandlerMap = new Map();
         this.isError = false;
-        this.viewConfig = { excludeRuntimeFiltersfromURL: false, ...viewConfig };
+        this.viewConfig = {
+            excludeRuntimeFiltersfromURL: false,
+            excludeRuntimeParametersfromURL: false,
+            ...viewConfig,
+        };
         this.shouldEncodeUrlQueryParams = this.embedConfig.shouldEncodeUrlQueryParams;
         this.registerAppInit();
         uploadMixpanelEvent(MIXPANEL_EVENT.VISUAL_SDK_EMBED_CREATE, {
@@ -14201,7 +14366,6 @@ class TsEmbed {
     }
     /**
      * Handles errors within the SDK
-     *
      * @param error The error message or object
      */
     handleError(error) {
@@ -14214,7 +14378,6 @@ class TsEmbed {
     }
     /**
      * Extracts the type field from the event payload
-     *
      * @param event The window message event
      */
     getEventType(event) {
@@ -14224,7 +14387,6 @@ class TsEmbed {
     }
     /**
      * Extracts the port field from the event payload
-     *
      * @param event  The window message event
      * @returns
      */
@@ -14237,7 +14399,6 @@ class TsEmbed {
     /**
      * fix for ts7.sep.cl
      * will be removed for ts7.oct.cl
-     *
      * @param event
      * @param eventType
      * @hidden
@@ -14294,11 +14455,10 @@ class TsEmbed {
     }
     /**
      * Constructs the base URL string to load the ThoughtSpot app.
-     *
      * @param query
      */
     getEmbedBasePath(query) {
-        let queryString = query;
+        let queryString = (query.startsWith('?')) ? query : `?${query}`;
         if (this.shouldEncodeUrlQueryParams) {
             queryString = `?base64UrlEncodedFlags=${getEncodedQueryParamsString(queryString.substr(1))}`;
         }
@@ -14309,7 +14469,6 @@ class TsEmbed {
     }
     /**
      * Common query params set for all the embed modes.
-     *
      * @param queryParams
      * @returns queryParams
      */
@@ -14339,7 +14498,16 @@ class TsEmbed {
         if (this.embedConfig.pendoTrackingKey) {
             queryParams[Param.PendoTrackingKey] = this.embedConfig.pendoTrackingKey;
         }
-        const { disabledActions, disabledActionReason, hiddenActions, visibleActions, hiddenTabs, visibleTabs, showAlerts, additionalFlags, locale, customizations, contextMenuTrigger, linkOverride, insertInToSlide, } = this.viewConfig;
+        if (this.embedConfig.numberFormatLocale) {
+            queryParams[Param.NumberFormatLocale] = this.embedConfig.numberFormatLocale;
+        }
+        if (this.embedConfig.dateFormatLocale) {
+            queryParams[Param.DateFormatLocale] = this.embedConfig.dateFormatLocale;
+        }
+        if (this.embedConfig.currencyFormat) {
+            queryParams[Param.CurrencyFormat] = this.embedConfig.currencyFormat;
+        }
+        const { disabledActions, disabledActionReason, hiddenActions, visibleActions, hiddenTabs, visibleTabs, showAlerts, additionalFlags, locale, customizations, contextMenuTrigger, linkOverride, insertInToSlide, disableRedirectionLinksInNewTab, } = this.viewConfig;
         if (Array.isArray(visibleActions) && Array.isArray(hiddenActions)) {
             this.handleError('You cannot have both hidden actions and visible actions');
             return queryParams;
@@ -14400,6 +14568,9 @@ class TsEmbed {
         if (insertInToSlide) {
             queryParams[Param.ShowInsertToSlide] = insertInToSlide;
         }
+        if (disableRedirectionLinksInNewTab) {
+            queryParams[Param.DisableRedirectionLinksInNewTab] = disableRedirectionLinksInNewTab;
+        }
         queryParams[Param.OverrideNativeConsole] = true;
         queryParams[Param.ClientLogLevel] = this.embedConfig.logLevel;
         return queryParams;
@@ -14407,7 +14578,6 @@ class TsEmbed {
     /**
      * Constructs the base URL string to load v1 of the ThoughtSpot app.
      * This is used for embedding Liveboards, visualizations, and full application.
-     *
      * @param queryString The query string to append to the URL.
      * @param isAppEmbed A Boolean parameter to specify if you are embedding
      * the full application.
@@ -14445,7 +14615,7 @@ class TsEmbed {
         iFrame.mozallowfullscreen = true;
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
-        iFrame.allow = 'clipboard-read; clipboard-write';
+        iFrame.allow = 'clipboard-read; clipboard-write fullscreen';
         const { height: frameHeight, width: frameWidth, ...restParams } = this.viewConfig.frameParams || {};
         const width = getCssDimension(frameWidth || DEFAULT_EMBED_WIDTH);
         const height = getCssDimension(frameHeight || DEFAULT_EMBED_HEIGHT);
@@ -14470,7 +14640,6 @@ class TsEmbed {
     /**
      * Renders the embedded ThoughtSpot app in an iframe and sets up
      * event listeners.
-     *
      * @param url - The URL of the embedded ThoughtSpot app.
      */
     async renderIFrame(url) {
@@ -14632,7 +14801,6 @@ class TsEmbed {
     }
     /**
      * Sets the height of the iframe
-     *
      * @param height The height in pixels
      */
     setIFrameHeight(height) {
@@ -14640,7 +14808,6 @@ class TsEmbed {
     }
     /**
      * Executes all registered event handlers for a particular event type
-     *
      * @param eventType The event type
      * @param data The payload invoked with the event handler
      * @param eventPort The event Port for a specific MessageChannel
@@ -14672,7 +14839,6 @@ class TsEmbed {
     }
     /**
      * Gets the v1 event type (if applicable) for the EmbedEvent type
-     *
      * @param eventType The v2 event type
      * @returns The corresponding v1 event type if one exists
      * or else the v2 event type itself
@@ -14684,7 +14850,6 @@ class TsEmbed {
      * Calculates the iframe center for the current visible viewPort
      * of iframe using Scroll position of Host App, offsetTop for iframe
      * in Host app. ViewPort height of the tab.
-     *
      * @returns iframe Center in visible viewport,
      *  Iframe height,
      *  View port height.
@@ -14718,7 +14883,6 @@ class TsEmbed {
     /**
      * Registers an event listener to trigger an alert when the ThoughtSpot app
      * sends an event of a particular message type to the host application.
-     *
      * @param messageType The message type
      * @param callback A callback as a function
      * @param options The message options
@@ -14744,7 +14908,7 @@ class TsEmbed {
             isRegisteredBySDK,
         });
         if (this.isRendered) {
-            this.handleError('Please register event handlers before calling render');
+            logger.warn('Please register event handlers before calling render');
         }
         const callbacks = this.eventHandlerMap.get(messageType) || [];
         callbacks.push({ options, callback });
@@ -14753,7 +14917,6 @@ class TsEmbed {
     }
     /**
      * Removes an event listener for a particular event type.
-     *
      * @param messageType The message type
      * @param callback The callback to remove
      * @example
@@ -14774,7 +14937,6 @@ class TsEmbed {
     /**
      * Triggers an event on specific Port registered against
      * for the EmbedEvent
-     *
      * @param eventType The message type
      * @param data The payload to send
      * @param eventPort
@@ -14799,7 +14961,6 @@ class TsEmbed {
     }
     /**
      * Triggers an event to the embedded app
-     *
      * @param messageType The event type
      * @param data The payload to send with the message
      */
@@ -14819,7 +14980,6 @@ class TsEmbed {
      * Marks the ThoughtSpot object to have been rendered
      * Needs to be overridden by subclasses to do the actual
      * rendering of the iframe.
-     *
      * @param args
      */
     async render() {
@@ -14834,12 +14994,11 @@ class TsEmbed {
     }
     /**
      * Creates the preRender shell
-     *
      * @param showPreRenderByDefault - Show the preRender after render, hidden by default
      */
     preRender(showPreRenderByDefault = false) {
         if (!this.viewConfig.preRenderId) {
-            logger.error('PreRender id is required for preRender');
+            logger.error(ERROR_MESSAGE.PRERENDER_ID_MISSING);
             return this;
         }
         this.isPreRendered = true;
@@ -14851,7 +15010,6 @@ class TsEmbed {
      * Get the Post Url Params for THOUGHTSPOT from the current
      * host app URL.
      * THOUGHTSPOT URL params starts with a prefix "ts-"
-     *
      * @version SDK: 1.14.0 | ThoughtSpot: 8.4.0.cl, 8.4.1-sw
      */
     getThoughtSpotPostUrlParams() {
@@ -14875,7 +15033,6 @@ class TsEmbed {
     }
     /**
      * Destroys the ThoughtSpot embed, and remove any nodes from the DOM.
-     *
      * @version SDK: 1.19.1 | ThoughtSpot: *
      */
     destroy() {
@@ -14895,7 +15052,6 @@ class TsEmbed {
      * Prerenders a generic instance of the TS component.
      * This means without the path but with the flags already applied.
      * This is useful for prerendering the component in the background.
-     *
      * @version SDK: 1.22.0
      * @returns
      */
@@ -14915,7 +15071,7 @@ class TsEmbed {
      */
     showPreRender() {
         if (!this.viewConfig.preRenderId) {
-            logger.error('PreRender id is required for preRender');
+            logger.error(ERROR_MESSAGE.PRERENDER_ID_MISSING);
             return;
         }
         if (!this.isPreRenderAvailable()) {
@@ -14952,13 +15108,12 @@ class TsEmbed {
      * element. This function adjusts the position, width, and height of the PreRender
      * component
      * to match the dimensions and position of the embedding element.
-     *
      * @throws {Error} Throws an error if the embedding element (passed as domSelector)
      * is not defined or not found.
      */
     syncPreRenderStyle() {
         if (!this.isPreRenderAvailable() || !this.el) {
-            logger.error('PreRender should be called before using syncPreRenderStyle');
+            logger.error(ERROR_MESSAGE.SYNC_STYLE_CALLED_BEFORE_RENDER);
             return;
         }
         const elBoundingClient = this.el.getBoundingClientRect();
@@ -14994,7 +15149,6 @@ class TsEmbed {
     /**
      * Retrieves unique HTML element IDs for PreRender-related elements.
      * These IDs are constructed based on the provided 'preRenderId' from 'viewConfig'.
-     *
      * @returns {object} An object containing the IDs for the PreRender elements.
      * @property {string} wrapper - The HTML element ID for the PreRender wrapper.
      * @property {string} child - The HTML element ID for the PreRender child.
@@ -15008,30 +15162,34 @@ class TsEmbed {
     /**
      * Returns the answerService which can be used to make arbitrary graphql calls on top
      * session.
-     *
      * @param vizId [Optional] to get for a specific viz in case of a liveboard.
      * @version SDK: 1.25.0 / ThoughtSpot 9.10.0
      */
     async getAnswerService(vizId) {
-        const { session, embedAnswerData } = await this.trigger(HostEvent.GetAnswerSession, vizId);
-        return new AnswerService(session, embedAnswerData, this.embedConfig.thoughtSpotHost);
+        const { session } = await this.trigger(HostEvent.GetAnswerSession, vizId);
+        return new AnswerService(session, null, this.embedConfig.thoughtSpotHost);
     }
 }
 /**
  * Base class for embedding v1 experience
  * Note: The v1 version of ThoughtSpot Blink works on the AngularJS stack
  * which is currently under migration to v2
- *
  * @inheritdoc
  */
 class V1Embed extends TsEmbed {
     constructor(domSelector, viewConfig) {
         super(domSelector, viewConfig);
+        /**
+         * Only for testing purposes.
+         *
+         * @hidden
+         */
+        // eslint-disable-next-line camelcase
+        this.test__executeCallbacks = this.executeCallbacks;
         this.viewConfig = { excludeRuntimeFiltersfromURL: false, ...viewConfig };
     }
     /**
      * Render the app in an iframe and set up event handlers
-     *
      * @param iframeSrc
      */
     renderV1Embed(iframeSrc) {
@@ -15040,9 +15198,9 @@ class V1Embed extends TsEmbed {
     getRootIframeSrc() {
         const queryParams = this.getEmbedParams();
         let queryString = queryParams;
-        const { runtimeParameters = [] } = this.viewConfig;
-        if ((runtimeParameters === null || runtimeParameters === void 0 ? void 0 : runtimeParameters.length) > 0) {
-            const parameterQuery = getRuntimeParameters(runtimeParameters);
+        if (!this.viewConfig.excludeRuntimeParametersfromURL) {
+            const runtimeParameters = this.viewConfig.runtimeParameters;
+            const parameterQuery = getRuntimeParameters(runtimeParameters || []);
             queryString = [parameterQuery, queryParams].filter(Boolean).join('&');
         }
         if (!this.viewConfig.excludeRuntimeFiltersfromURL) {
@@ -15050,7 +15208,9 @@ class V1Embed extends TsEmbed {
             const filterQuery = getFilterQuery(runtimeFilters || []);
             queryString = [filterQuery, queryString].filter(Boolean).join('&');
         }
-        return this.getV1EmbedBasePath(queryString);
+        return (this.viewConfig.enableV2Shell_experimental)
+            ? this.getEmbedBasePath(queryString)
+            : this.getV1EmbedBasePath(queryString);
     }
     /**
      * @inheritdoc
@@ -15080,7 +15240,6 @@ class V1Embed extends TsEmbed {
  *
  * Full application embedding
  * https://developers.thoughtspot.com/docs/?pageid=full-embed
- *
  * @summary Full app embed
  * @module
  * @author Ayon Ghosh <ayon.ghosh@thoughtspot.com>
@@ -15121,8 +15280,26 @@ var Page;
     Page["SpotIQ"] = "insights";
 })(Page || (Page = {}));
 /**
+ * Define the initial state os column custom group accordions
+ * in data panel v2.
+ */
+var DataPanelCustomColumnGroupsAccordionState;
+(function (DataPanelCustomColumnGroupsAccordionState) {
+    /**
+     * Expand all the accordion initially in data panel v2.
+     */
+    DataPanelCustomColumnGroupsAccordionState["EXPAND_ALL"] = "EXPAND_ALL";
+    /**
+     * Collapse all the accordions initially in data panel v2.
+     */
+    DataPanelCustomColumnGroupsAccordionState["COLLAPSE_ALL"] = "COLLAPSE_ALL";
+    /**
+     * Expand the first accordion and collapse the rest.
+     */
+    DataPanelCustomColumnGroupsAccordionState["EXPAND_FIRST"] = "EXPAND_FIRST";
+})(DataPanelCustomColumnGroupsAccordionState || (DataPanelCustomColumnGroupsAccordionState = {}));
+/**
  * Embeds full ThoughtSpot experience in a host application.
- *
  * @group Embed components
  */
 class AppEmbed extends V1Embed {
@@ -15134,7 +15311,6 @@ class AppEmbed extends V1Embed {
         /**
          * Set the iframe height as per the computed height received
          * from the ThoughtSpot app.
-         *
          * @param data The event payload
          */
         this.updateIFrameHeight = (data) => {
@@ -15162,7 +15338,9 @@ class AppEmbed extends V1Embed {
      * embedded Liveboard or visualization.
      */
     getEmbedParams() {
-        const { tag, hideObjects, liveboardV2, showPrimaryNavbar, disableProfileAndHelp, hideApplicationSwitcher, hideOrgSwitcher, enableSearchAssist, fullHeight, dataPanelV2 = false, hideLiveboardHeader = false, showLiveboardTitle = true, showLiveboardDescription = true, hideHomepageLeftNav = false, modularHomeExperience = false, isLiveboardHeaderSticky = true, enableAskSage, } = this.viewConfig;
+        const { tag, hideObjects, liveboardV2, showPrimaryNavbar, disableProfileAndHelp, hideApplicationSwitcher, hideOrgSwitcher, enableSearchAssist, fullHeight, dataPanelV2 = false, hideLiveboardHeader = false, showLiveboardTitle = true, showLiveboardDescription = true, hideHomepageLeftNav = false, modularHomeExperience = false, isLiveboardHeaderSticky = true, enableAskSage, collapseSearchBarInitially = false, enable2ColumnLayout, enableCustomColumnGroups = false, isOnBeforeGetVizDataInterceptEnabled = false, 
+        /* eslint-disable-next-line max-len */
+        dataPanelCustomGroupsAccordionInitialState = DataPanelCustomColumnGroupsAccordionState.EXPAND_ALL, collapseSearchBar = true, } = this.viewConfig;
         let params = {};
         params[Param.EmbedApp] = true;
         params[Param.PrimaryNavHidden] = !showPrimaryNavbar;
@@ -15173,6 +15351,7 @@ class AppEmbed extends V1Embed {
         params[Param.ShowLiveboardTitle] = showLiveboardTitle;
         params[Param.ShowLiveboardDescription] = !!showLiveboardDescription;
         params[Param.LiveboardHeaderSticky] = isLiveboardHeaderSticky;
+        params[Param.IsFullAppEmbed] = true;
         params = this.getBaseQueryParams(params);
         if (fullHeight === true) {
             params[Param.fullHeight] = true;
@@ -15189,18 +15368,37 @@ class AppEmbed extends V1Embed {
         if (enableSearchAssist !== undefined) {
             params[Param.EnableSearchAssist] = enableSearchAssist;
         }
+        if (enable2ColumnLayout !== undefined) {
+            params[Param.Enable2ColumnLayout] = enable2ColumnLayout;
+        }
         if (enableAskSage) {
             params[Param.enableAskSage] = enableAskSage;
+        }
+        if (isOnBeforeGetVizDataInterceptEnabled) {
+            /* eslint-disable-next-line max-len */
+            params[Param.IsOnBeforeGetVizDataInterceptEnabled] = isOnBeforeGetVizDataInterceptEnabled;
         }
         params[Param.DataPanelV2Enabled] = dataPanelV2;
         params[Param.HideHomepageLeftNav] = hideHomepageLeftNav;
         params[Param.ModularHomeExperienceEnabled] = modularHomeExperience;
+        params[Param.CollapseSearchBarInitially] = collapseSearchBarInitially || collapseSearchBar;
+        params[Param.EnableCustomColumnGroups] = enableCustomColumnGroups;
+        if (dataPanelCustomGroupsAccordionInitialState
+            === DataPanelCustomColumnGroupsAccordionState.COLLAPSE_ALL
+            || dataPanelCustomGroupsAccordionInitialState
+                === DataPanelCustomColumnGroupsAccordionState.EXPAND_FIRST) {
+            /* eslint-disable-next-line max-len */
+            params[Param.DataPanelCustomGroupsAccordionInitialState] = dataPanelCustomGroupsAccordionInitialState;
+        }
+        else {
+            /* eslint-disable-next-line max-len */
+            params[Param.DataPanelCustomGroupsAccordionInitialState] = DataPanelCustomColumnGroupsAccordionState.EXPAND_ALL;
+        }
         const queryParams = getQueryParamString(params, true);
         return queryParams;
     }
     /**
      * Constructs the URL of the ThoughtSpot app page to be rendered.
-     *
      * @param pageId The ID of the page to be embedded.
      */
     getIFrameSrc() {
@@ -15213,7 +15411,6 @@ class AppEmbed extends V1Embed {
     }
     /**
      * Gets the ThoughtSpot route of the page for a particular page ID.
-     *
      * @param pageId The identifier for a page in the ThoughtSpot app.
      * @param modularHomeExperience
      */
@@ -15238,7 +15435,6 @@ class AppEmbed extends V1Embed {
     }
     /**
      * Formats the path provided by the user.
-     *
      * @param path The URL path.
      * @returns The URL path that the embedded app understands.
      */
@@ -15256,7 +15452,6 @@ class AppEmbed extends V1Embed {
      * Navigate to particular page for app embed. eg:answers/pinboards/home
      * This is used for embedding answers, pinboards, visualizations and full application
      * only.
-     *
      * @param path string | number The string, set to iframe src and navigate to new page
      * eg: appEmbed.navigateToPage('pinboards')
      * When used with `noReload` (default: true) this can also be a number
@@ -15285,7 +15480,6 @@ class AppEmbed extends V1Embed {
     }
     /**
      * Renders the embedded application pages in the ThoughtSpot app.
-     *
      * @param renderOptions An object containing the page ID
      * to be embedded.
      */
@@ -15297,13 +15491,77 @@ class AppEmbed extends V1Embed {
     }
 }
 
+/* eslint-disable quotes */
+const getPreviewQuery = `
+query GetEurekaVizSnapshots(
+    $vizId: String!, $liveboardId: String!) {
+    getEurekaVizSnapshot(
+      id: $vizId
+      reportBookId: $liveboardId
+      reportBookType: "PINBOARD_ANSWER_BOOK"
+      version: 9999999
+    ) {
+      id
+      vizContent
+      snapshotType
+      createdMs
+    }
+  } 
+`;
+async function getPreview(thoughtSpotHost, vizId, liveboardId) {
+    return graphqlQuery({
+        query: getPreviewQuery,
+        variables: { vizId, liveboardId },
+        thoughtSpotHost,
+    });
+}
+
+const addPreviewStylesIfNotPresent = () => {
+    const styleEl = document.getElementById('ts-preview-style');
+    if (styleEl) {
+        return;
+    }
+    const previewStyles = `
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@32.0.2/styles/ag-grid.min.css">
+        <style id="ts-preview-style">
+           .ts-viz-preview-loader {
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                background: linear-gradient(-45deg, #eee 40%, #fafafa 50%, #eee 60%);
+                background-size: 300%;
+                background-position-x: 100%;
+                animation: shimmer 1s infinite linear;
+                z-index: 999;
+                filter: grayscale(0.2);
+           }
+
+           @keyframes shimmer {
+                to {
+                    background-position-x: 0%
+                }
+           }
+
+           .ts-viz-preview-loader .table-module__fullContainer {
+                width: 100%;
+                height: 100%;
+           }
+        </style>
+    `;
+    document.head.insertAdjacentHTML('beforeend', previewStyles);
+};
+
 /**
  * Copyright (c) 2022
  *
  * Embed a ThoughtSpot Liveboard or visualization
  * https://developers.thoughtspot.com/docs/?pageid=embed-pinboard
  * https://developers.thoughtspot.com/docs/?pageid=embed-a-viz
- *
  * @summary Liveboard & visualization embed
  * @author Ayon Ghosh <ayon.ghosh@thoughtspot.com>
  */
@@ -15311,7 +15569,6 @@ class AppEmbed extends V1Embed {
  * Embed a ThoughtSpot Liveboard or visualization. When rendered it already
  * waits for the authentication to complete, so you need not wait for
  * `AuthStatus.SUCCESS`.
- *
  * @example
  * ```js
  * import { .. } from '@thoughtspot/visual-embed-sdk';
@@ -15332,7 +15589,6 @@ class LiveboardEmbed extends V1Embed {
         /**
          * Set the iframe height as per the computed height received
          * from the ThoughtSpot app.
-         *
          * @param data The event payload
          */
         this.updateIFrameHeight = (data) => {
@@ -15343,9 +15599,11 @@ class LiveboardEmbed extends V1Embed {
             responder({ type: EmbedEvent.EmbedIframeCenter, data: obj });
         };
         this.setIframeHeightForNonEmbedLiveboard = (data) => {
-            if (!data.data.currentPath.startsWith('/embed/viz/')) {
-                this.setIFrameHeight(this.defaultHeight);
+            if (data.data.currentPath.startsWith('/embed/viz/')
+                || data.data.currentPath.startsWith('/embed/insights/viz/')) {
+                return;
             }
+            this.setIFrameHeight(this.defaultHeight);
         };
         if (this.viewConfig.fullHeight === true) {
             this.on(EmbedEvent.RouteChange, this.setIframeHeightForNonEmbedLiveboard);
@@ -15361,7 +15619,7 @@ class LiveboardEmbed extends V1Embed {
         let params = {};
         params[Param.EmbedApp] = true;
         params = this.getBaseQueryParams(params);
-        const { enableVizTransformations, fullHeight, defaultHeight, visibleVizs, liveboardV2, vizId, hideTabPanel, activeTabId, hideLiveboardHeader, showLiveboardDescription, showLiveboardTitle, isLiveboardHeaderSticky = true, enableAskSage, } = this.viewConfig;
+        const { enableVizTransformations, fullHeight, defaultHeight, visibleVizs, liveboardV2, vizId, hideTabPanel, activeTabId, hideLiveboardHeader, showLiveboardDescription, showLiveboardTitle, isLiveboardHeaderSticky = true, enableAskSage, enable2ColumnLayout, } = this.viewConfig;
         const preventLiveboardFilterRemoval = this.viewConfig.preventLiveboardFilterRemoval
             || this.viewConfig.preventPinboardFilterRemoval;
         if (fullHeight === true) {
@@ -15385,6 +15643,9 @@ class LiveboardEmbed extends V1Embed {
         }
         if (liveboardV2 !== undefined) {
             params[Param.LiveboardV2Enabled] = liveboardV2;
+        }
+        if (enable2ColumnLayout !== undefined) {
+            params[Param.Enable2ColumnLayout] = enable2ColumnLayout;
         }
         if (hideTabPanel) {
             params[Param.HideTabPanel] = hideTabPanel;
@@ -15437,6 +15698,33 @@ class LiveboardEmbed extends V1Embed {
             super.trigger(HostEvent.Navigate, path);
         }
     }
+    async showPreviewLoader() {
+        if (!this.viewConfig.showPreviewLoader || !this.viewConfig.vizId) {
+            return;
+        }
+        try {
+            const preview = await getPreview(this.thoughtSpotHost, this.viewConfig.vizId, this.viewConfig.liveboardId);
+            if (!preview.vizContent) {
+                return;
+            }
+            addPreviewStylesIfNotPresent();
+            const div = document.createElement('div');
+            div.innerHTML = `
+                <div class=ts-viz-preview-loader>
+                    ${preview.vizContent}
+                </div>
+                `;
+            const previewDiv = div.firstElementChild;
+            this.el.appendChild(previewDiv);
+            this.el.style.position = 'relative';
+            this.on(EmbedEvent.Data, () => {
+                previewDiv.remove();
+            });
+        }
+        catch (error) {
+            console.error('Error fetching preview', error);
+        }
+    }
     beforePrerenderVisible() {
         var _a;
         const embedObj = (_a = this.insertedDomEl) === null || _a === void 0 ? void 0 : _a[this.embedNodeKey];
@@ -15458,7 +15746,6 @@ class LiveboardEmbed extends V1Embed {
     }
     /**
      * Triggers an event to the embedded app
-     *
      * @param messageType The event type
      * @param data The payload to send with the message
      */
@@ -15475,7 +15762,6 @@ class LiveboardEmbed extends V1Embed {
     }
     /**
      * Render an embedded ThoughtSpot Liveboard or visualization
-     *
      * @param renderOptions An object specifying the Liveboard ID,
      * visualization ID and the runtime filters.
      */
@@ -15483,6 +15769,7 @@ class LiveboardEmbed extends V1Embed {
         super.render();
         const src = this.getIFrameSrc();
         await this.renderV1Embed(src);
+        this.showPreviewLoader();
         return this;
     }
     navigateToLiveboard(liveboardId, vizId, activeTabId) {
@@ -15511,10 +15798,28 @@ class PinboardEmbed extends LiveboardEmbed {
  * Copyright (c) 2022
  *
  * Embed ThoughtSpot search or a saved answer
- *
  * @summary Search embed
  * @author Ayon Ghosh <ayon.ghosh@thoughtspot.com>
  */
+/**
+ * Define the initial state os column custom group accordions
+ * in data panel v2.
+ */
+var DataPanelCustomColumnGroupsAccordionState$1;
+(function (DataPanelCustomColumnGroupsAccordionState) {
+    /**
+     * Expand all the accordion initially in data panel v2.
+     */
+    DataPanelCustomColumnGroupsAccordionState["EXPAND_ALL"] = "EXPAND_ALL";
+    /**
+     * Collapse all the accordions initially in data panel v2.
+     */
+    DataPanelCustomColumnGroupsAccordionState["COLLAPSE_ALL"] = "COLLAPSE_ALL";
+    /**
+     * Expand the first accordion and collapse the rest.
+     */
+    DataPanelCustomColumnGroupsAccordionState["EXPAND_FIRST"] = "EXPAND_FIRST";
+})(DataPanelCustomColumnGroupsAccordionState$1 || (DataPanelCustomColumnGroupsAccordionState$1 = {}));
 const HiddenActionItemByDefaultForSearchEmbed = [
     Action.EditACopy,
     Action.SaveAsView,
@@ -15524,7 +15829,6 @@ const HiddenActionItemByDefaultForSearchEmbed = [
 ];
 /**
  * Embed ThoughtSpot search
- *
  * @group Embed components
  */
 class SearchEmbed extends TsEmbed {
@@ -15538,7 +15842,8 @@ class SearchEmbed extends TsEmbed {
      */
     getDataSourceMode() {
         let dataSourceMode = DataSourceVisualMode.Expanded;
-        if (this.viewConfig.collapseDataSources === true) {
+        if (this.viewConfig.collapseDataSources === true
+            || this.viewConfig.collapseDataPanel === true) {
             dataSourceMode = DataSourceVisualMode.Collapsed;
         }
         if (this.viewConfig.hideDataSources === true) {
@@ -15548,7 +15853,9 @@ class SearchEmbed extends TsEmbed {
     }
     getEmbedParams() {
         var _a;
-        const { hideResults, expandAllDataSource, enableSearchAssist, forceTable, searchOptions, runtimeFilters, dataSource, dataSources, excludeRuntimeFiltersfromURL, hideSearchBar, dataPanelV2 = false, useLastSelectedSources = false, runtimeParameters, } = this.viewConfig;
+        const { hideResults, enableSearchAssist, forceTable, searchOptions, runtimeFilters, dataSource, dataSources, excludeRuntimeFiltersfromURL, hideSearchBar, dataPanelV2 = false, useLastSelectedSources = false, runtimeParameters, collapseSearchBarInitially = false, enableCustomColumnGroups = false, isOnBeforeGetVizDataInterceptEnabled = false, 
+        /* eslint-disable-next-line max-len */
+        dataPanelCustomGroupsAccordionInitialState = DataPanelCustomColumnGroupsAccordionState$1.EXPAND_ALL, focusSearchBarOnRender = true, excludeRuntimeParametersfromURL, collapseSearchBar = true, } = this.viewConfig;
         const queryParams = this.getBaseQueryParams();
         queryParams[Param.HideActions] = [
             ...((_a = queryParams[Param.HideActions]) !== null && _a !== void 0 ? _a : []),
@@ -15578,6 +15885,13 @@ class SearchEmbed extends TsEmbed {
         if (hideSearchBar) {
             queryParams[Param.HideSearchBar] = true;
         }
+        if (isOnBeforeGetVizDataInterceptEnabled) {
+            /* eslint-disable-next-line max-len */
+            queryParams[Param.IsOnBeforeGetVizDataInterceptEnabled] = isOnBeforeGetVizDataInterceptEnabled;
+        }
+        if (!focusSearchBarOnRender) {
+            queryParams[Param.FocusSearchBarOnRender] = focusSearchBarOnRender;
+        }
         queryParams[Param.DataPanelV2Enabled] = dataPanelV2;
         queryParams[Param.DataSourceMode] = this.getDataSourceMode();
         queryParams[Param.UseLastSelectedDataSource] = useLastSelectedSources;
@@ -15585,13 +15899,27 @@ class SearchEmbed extends TsEmbed {
             queryParams[Param.UseLastSelectedDataSource] = false;
         }
         queryParams[Param.searchEmbed] = true;
+        /* eslint-disable-next-line max-len */
+        queryParams[Param.CollapseSearchBarInitially] = collapseSearchBarInitially || collapseSearchBar;
+        queryParams[Param.EnableCustomColumnGroups] = enableCustomColumnGroups;
+        if (dataPanelCustomGroupsAccordionInitialState
+            === DataPanelCustomColumnGroupsAccordionState$1.COLLAPSE_ALL
+            || dataPanelCustomGroupsAccordionInitialState
+                === DataPanelCustomColumnGroupsAccordionState$1.EXPAND_FIRST) {
+            /* eslint-disable-next-line max-len */
+            queryParams[Param.DataPanelCustomGroupsAccordionInitialState] = dataPanelCustomGroupsAccordionInitialState;
+        }
+        else {
+            /* eslint-disable-next-line max-len */
+            queryParams[Param.DataPanelCustomGroupsAccordionInitialState] = DataPanelCustomColumnGroupsAccordionState$1.EXPAND_ALL;
+        }
         let query = '';
         const queryParamsString = getQueryParamString(queryParams, true);
         if (queryParamsString) {
             query = `?${queryParamsString}`;
         }
         const parameterQuery = getRuntimeParameters(runtimeParameters || []);
-        if (parameterQuery)
+        if (parameterQuery && !excludeRuntimeParametersfromURL)
             query += `&${parameterQuery}`;
         const filterQuery = getFilterQuery(runtimeFilters || []);
         if (filterQuery && !excludeRuntimeFiltersfromURL) {
@@ -15602,7 +15930,6 @@ class SearchEmbed extends TsEmbed {
     /**
      * Construct the URL of the embedded ThoughtSpot search to be
      * loaded in the iframe
-     *
      * @param answerId The GUID of a saved answer
      * @param dataSources A list of data source GUIDs
      */
@@ -15632,7 +15959,6 @@ class SearchEmbed extends TsEmbed {
 
 /**
  * Embed ThoughtSpot search bar
- *
  * @version: SDK: 1.18.0 | ThoughtSpot: 8.10.0.cl, 9.0.1-sw
  * @group Embed components
  */
@@ -15645,7 +15971,6 @@ class SearchBarEmbed extends TsEmbed {
     /**
      * Construct the URL of the embedded ThoughtSpot search to be
      * loaded in the iframe
-     *
      * @param dataSources A list of data source GUIDs
      */
     getIFrameSrc() {
@@ -15694,23 +16019,11 @@ class SearchBarEmbed extends TsEmbed {
  * Copyright (c) 2023
  *
  * Embed ThoughtSpot Sage
- *
  * @summary TS Sage embed
  * @author Mourya Balabhadra <mourya.balabhadra@thoughtspot.com>
  */
-const HiddenActionItemByDefaultForSageEmbed = [
-    Action.Save,
-    Action.Pin,
-    Action.EditACopy,
-    Action.SaveAsView,
-    Action.UpdateTML,
-    Action.EditTML,
-    Action.AnswerDelete,
-    Action.Share,
-];
 /**
  * Embed ThoughtSpot LLM and GPT-based Natural Language Search component.
- *
  * @version: SDK: 1.23.0 | ThoughtSpot: 9.4.0.cl, 9.5.1-sw
  * @group Embed components
  */
@@ -15723,12 +16036,10 @@ class SageEmbed extends V1Embed {
     /**
      * Constructs a map of parameters to be passed on to the
      * embedded Eureka or Sage search page.
-     *
      * @returns {string} query string
      */
     getEmbedParams() {
-        var _a;
-        const { disableWorksheetChange, hideWorksheetSelector, showObjectSuggestions, hideSampleQuestions, isProductTour, hideSearchBarTitle, hideSageAnswerHeader, hideAutocompleteSuggestions, } = this.viewConfig;
+        const { disableWorksheetChange, hideWorksheetSelector, showObjectSuggestions, hideSampleQuestions, isProductTour, hideSageAnswerHeader, hideAutocompleteSuggestions, } = this.viewConfig;
         const params = this.getBaseQueryParams();
         params[Param.EmbedApp] = true;
         params[Param.IsSageEmbed] = true;
@@ -15741,18 +16052,12 @@ class SageEmbed extends V1Embed {
         }
         params[Param.HideSampleQuestions] = !!hideSampleQuestions;
         params[Param.IsProductTour] = !!isProductTour;
-        params[Param.HideSearchBarTitle] = !!hideSearchBarTitle;
         params[Param.HideSageAnswerHeader] = !!hideSageAnswerHeader;
-        params[Param.HideActions] = [
-            ...((_a = params[Param.HideActions]) !== null && _a !== void 0 ? _a : []),
-            ...HiddenActionItemByDefaultForSageEmbed,
-        ];
         return getQueryParamString(params, true);
     }
     /**
      * Construct the URL of the embedded ThoughtSpot sage to be
      * loaded in the iframe
-     *
      * @returns {string} iframe url
      */
     getIFrameSrc() {
@@ -15776,7 +16081,6 @@ class SageEmbed extends V1Embed {
     }
     /**
      * Render the embedded ThoughtSpot Sage
-     *
      * @returns {SageEmbed} Eureka/Sage embed
      */
     async render() {
@@ -15787,4 +16091,4 @@ class SageEmbed extends V1Embed {
     }
 }
 
-export { Action, AnswerService, AppEmbed, AuthEvent, AuthFailureType, AuthStatus, AuthType, ContextMenuTriggerOptions, DataSourceVisualMode, EmbedEvent, HomeLeftNavItem, HomepageModule, HostEvent, LiveboardEmbed, LogLevel, MIXPANEL_EVENT, Page, PinboardEmbed, PrefetchFeatures, RuntimeFilterOp, SageEmbed, SearchBarEmbed, SearchEmbed, executeTML, exportTML, getEmbedConfig as getInitConfig, getSessionInfo, init, logout$1 as logout, prefetch, tokenizedFetch, uploadMixpanelEvent };
+export { Action, AnswerService, AppEmbed, AuthEvent, AuthFailureType, AuthStatus, AuthType, ContextMenuTriggerOptions, DataSourceVisualMode, EmbedEvent, HomeLeftNavItem, HomepageModule, HostEvent, LiveboardEmbed, LogLevel, MIXPANEL_EVENT, Page, PinboardEmbed, PrefetchFeatures, RuntimeFilterOp, SageEmbed, SearchBarEmbed, SearchEmbed, executeTML, exportTML, getEmbedConfig as getInitConfig, getSessionInfo, init, logout$1 as logout, prefetch, resetCachedAuthToken, tokenizedFetch, uploadMixpanelEvent };
